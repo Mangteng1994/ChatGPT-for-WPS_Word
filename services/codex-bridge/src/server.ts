@@ -1,6 +1,55 @@
 import { createServer } from "node:http";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { runCodex } from "./codex-runner";
 import type { BridgeRunRequest, BridgeRunResponse } from "./protocol";
+
+interface RuntimeConfig {
+  host: string;
+  port: number;
+  cliPath: string;
+  workingDir: string;
+}
+
+type LocalConfig = Partial<{
+  host: string;
+  port: number;
+  cliPath: string;
+  workingDir: string;
+}>;
+
+function toNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function loadLocalConfigFile(): LocalConfig {
+  const configPath = path.resolve(process.cwd(), "services", "codex-bridge", "config.local.json");
+  if (!existsSync(configPath)) return {};
+  try {
+    return JSON.parse(readFileSync(configPath, "utf8")) as LocalConfig;
+  } catch (error) {
+    throw new Error(
+      `failed to parse config.local.json: ${(error as Error).message}`
+    );
+  }
+}
+
+function loadRuntimeConfig(): RuntimeConfig {
+  const fileConfig = loadLocalConfigFile();
+  const host = process.env.CODEX_BRIDGE_HOST || fileConfig.host || "127.0.0.1";
+  const port = toNumber(process.env.CODEX_BRIDGE_PORT || fileConfig.port, 32123);
+  const cliPath = process.env.CODEX_CLI_PATH || fileConfig.cliPath || "codex";
+  const workingDir = process.env.CODEX_WORKING_DIR || fileConfig.workingDir || "";
+
+  if (!workingDir.trim()) {
+    throw new Error(
+      "CODEX_WORKING_DIR is required (or set services/codex-bridge/config.local.json -> workingDir)"
+    );
+  }
+
+  return { host, port, cliPath, workingDir: path.resolve(workingDir) };
+}
 
 function buildPrompt(req: BridgeRunRequest): string {
   const instruction = (req.instruction || "").trim();
@@ -37,7 +86,22 @@ function buildPrompt(req: BridgeRunRequest): string {
     .join("\n");
 }
 
-const server = createServer(async (req, res) => {
+function setCorsHeaders(res: import("node:http").ServerResponse): void {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+}
+
+const runtime = loadRuntimeConfig();
+
+const server = createServer((req, res) => {
+  setCorsHeaders(res);
+  if (req.method === "OPTIONS") {
+    res.statusCode = 204;
+    res.end();
+    return;
+  }
+
   if (req.method !== "POST" || req.url !== "/run") {
     res.statusCode = 404;
     res.end("Not Found");
@@ -51,11 +115,13 @@ const server = createServer(async (req, res) => {
       const payload = JSON.parse(body) as BridgeRunRequest;
       const prompt = buildPrompt(payload);
       const result = await runCodex({
+        cliPath: runtime.cliPath,
         prompt,
-        workingDir: payload.workingDir,
+        workingDir: runtime.workingDir,
         model: payload.model,
         threadId: payload.threadId,
       });
+
       const response: BridgeRunResponse = {
         ok: true,
         output: result.output,
@@ -77,7 +143,9 @@ const server = createServer(async (req, res) => {
   });
 });
 
-server.listen(32123, "127.0.0.1", () => {
-  console.log("codex-bridge listening on http://127.0.0.1:32123");
+server.listen(runtime.port, runtime.host, () => {
+  console.log(
+    `codex-bridge listening on http://${runtime.host}:${runtime.port} (workingDir=${runtime.workingDir})`
+  );
 });
 

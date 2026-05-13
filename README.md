@@ -24,3 +24,15 @@ docs/                      # 设计文档
 3. 增加“插入内容”“摘要”两个动作
 4. 加入会话 threadId 续聊与基础日志
 
+## 本地联调
+
+1. 安装依赖：
+   - `npm install`
+2. 配置 bridge（两种方式任选其一）：
+   - 环境变量：`CODEX_WORKING_DIR`（必填）、`CODEX_CLI_PATH`（可选）
+   - 或复制 `services/codex-bridge/config.example.json` 为 `services/codex-bridge/config.local.json` 并填写
+3. 启动 bridge：
+   - `npm run bridge:dev`
+4. 启动前端调试页：
+   - `npm run panel:dev`
+5. 打开 `http://127.0.0.1:5173`，注入 WebOffice `instance` 后测试三按钮流程。

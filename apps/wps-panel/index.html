@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Codex for WPS Word</title>
+  </head>
+  <body>
+    <main class="panel">
+      <h1>Codex for WPS Word</h1>
+      <p class="hint">选择操作后会调用本地 bridge，并将结果写回当前文档。</p>
+      <label class="field">
+        <span>附加指令（可选）</span>
+        <textarea id="instruction" rows="4" placeholder="例如：保持正式语气，压缩到 120 字以内"></textarea>
+      </label>
+      <div class="actions">
+        <button id="action-rewrite" type="button">改写选区</button>
+        <button id="action-summary" type="button">摘要选区</button>
+        <button id="action-insert" type="button">插入到光标后</button>
+      </div>
+      <div id="status" class="status" data-error="0"></div>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+

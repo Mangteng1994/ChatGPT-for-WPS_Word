@@ -4,7 +4,12 @@
   "version": "0.0.1",
   "description": "Personal Codex assistant for WPS Word",
   "scripts": {
-    "bridge:dev": "node services/codex-bridge/src/server.ts"
+    "bridge:dev": "tsx services/codex-bridge/src/server.ts",
+    "panel:dev": "vite apps/wps-panel --host 127.0.0.1 --port 5173"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "^7.2.0"
   }
 }
-

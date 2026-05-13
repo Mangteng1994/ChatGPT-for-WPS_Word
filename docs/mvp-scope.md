@@ -7,6 +7,7 @@
 - 替换当前选区文本
 - 在光标后插入文本
 - 选区摘要
+- 前端维护内存态 `threadId`，用于续聊
 
 ## Out of Scope
 
@@ -22,3 +23,31 @@
 3. 摘要输出可回填到文档
 4. 整个过程本地可见错误信息并可重试
 
+## Bridge API Contract (MVP)
+
+- Endpoint: `POST /run`
+- Request JSON:
+  - `task`: `"rewrite" | "summary" | "insert"`
+  - `content`: `string`
+  - `instruction?`: `string`
+  - `threadId?`: `string`
+  - `model?`: `string`
+- Success Response (`200`):
+  - `ok: true`
+  - `output: string`
+  - `threadId?: string`
+  - `events?: object[]`
+- Error Response (`500`):
+  - `ok: false`
+  - `output: ""`
+  - `error: string`
+
+## Runtime Config (Bridge)
+
+- 优先级：环境变量 > `services/codex-bridge/config.local.json`
+- 必填：
+  - `CODEX_WORKING_DIR`（或本地配置文件 `workingDir`）
+- 可选：
+  - `CODEX_CLI_PATH`（默认 `codex`）
+  - `CODEX_BRIDGE_HOST`（默认 `127.0.0.1`）
+  - `CODEX_BRIDGE_PORT`（默认 `32123`）

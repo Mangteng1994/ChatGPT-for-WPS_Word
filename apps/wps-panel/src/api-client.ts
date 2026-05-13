@@ -14,4 +14,3 @@ export async function runByBridge(payload: CodexRunRequest): Promise<CodexRunRes
   }
   return data;
 }
-

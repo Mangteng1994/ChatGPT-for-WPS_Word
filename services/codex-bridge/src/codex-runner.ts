@@ -2,10 +2,27 @@ import { spawn } from "node:child_process";
 import type { CodexStreamEvent } from "../../../shared/types";
 
 export interface RunOptions {
+  cliPath: string;
   prompt: string;
   workingDir: string;
   model?: string;
   threadId?: string;
+}
+
+function getAssistantTextFromEvent(event: CodexStreamEvent): string {
+  const type = String(event.type || "");
+  const item = (event as { item?: { type?: string; text?: string } }).item;
+  if (item && (type === "item.delta" || type === "item.completed")) {
+    const itemType = String(item.type || "").toLowerCase();
+    if (itemType === "assistant_message" || itemType === "agent_message") {
+      return typeof item.text === "string" ? item.text : "";
+    }
+  }
+  if (typeof (event as { delta?: unknown }).delta === "string") {
+    return String((event as { delta?: string }).delta || "");
+  }
+  if (typeof event.text === "string") return event.text;
+  return "";
 }
 
 export async function runCodex(options: RunOptions): Promise<{
@@ -21,13 +38,18 @@ export async function runCodex(options: RunOptions): Promise<{
     args.push("-");
   }
 
-  const child = spawn("codex", args, { stdio: ["pipe", "pipe", "pipe"], windowsHide: true });
+  const child = spawn(options.cliPath, args, {
+    stdio: ["pipe", "pipe", "pipe"],
+    windowsHide: true,
+    shell: /\.(cmd|bat)$/i.test(options.cliPath),
+  });
 
   let output = "";
   let stdoutBuf = "";
   let stderrBuf = "";
   let capturedThreadId = options.threadId;
   const events: CodexStreamEvent[] = [];
+  let hasDeltaOutput = false;
 
   child.stdout.on("data", (chunk: Buffer) => {
     stdoutBuf += chunk.toString("utf8");
@@ -43,8 +65,16 @@ export async function runCodex(options: RunOptions): Promise<{
         if (event.type === "thread.started" && typeof event.thread_id === "string") {
           capturedThreadId = event.thread_id;
         }
-        const text = typeof event.text === "string" ? event.text : "";
-        if (text) output += text;
+        const text = getAssistantTextFromEvent(event);
+        if (!text) continue;
+        if (event.type === "item.delta") {
+          hasDeltaOutput = true;
+          output += text;
+          continue;
+        }
+        if (!hasDeltaOutput) {
+          output += text;
+        }
       } catch {
         events.push({ type: "stdout.raw", text: line });
       }
@@ -69,4 +99,3 @@ export async function runCodex(options: RunOptions): Promise<{
 
   return { output: output.trim(), threadId: capturedThreadId, events };
 }
-

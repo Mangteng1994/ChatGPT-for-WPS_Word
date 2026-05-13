@@ -1,0 +1,7 @@
+{
+  "host": "127.0.0.1",
+  "port": 32123,
+  "cliPath": "codex",
+  "workingDir": "E:/path/to/your/workspace"
+}
+

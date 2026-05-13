@@ -5,7 +5,6 @@ export interface CodexRunRequest {
   content: string;
   instruction?: string;
   threadId?: string;
-  workingDir: string;
   model?: string;
 }
 
@@ -23,4 +22,3 @@ export interface CodexRunResponse {
   events?: CodexStreamEvent[];
   error?: string;
 }
-
