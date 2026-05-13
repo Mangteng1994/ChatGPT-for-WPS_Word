@@ -1,0 +1,10 @@
+{
+  "name": "codex-for-wps-word",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Personal Codex assistant for WPS Word",
+  "scripts": {
+    "bridge:dev": "node services/codex-bridge/src/server.ts"
+  }
+}
+
