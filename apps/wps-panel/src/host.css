@@ -1,0 +1,142 @@
+:root {
+  --bg: #eef3f8;
+  --card: #ffffff;
+  --text: #1a2633;
+  --muted: #5f6f82;
+  --accent: #006e54;
+  --accent-hover: #005742;
+  --danger: #be2f2f;
+  --border: #d6dfeb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: radial-gradient(circle at 0 0, #f5f9fd 0%, #eaf1f9 100%);
+  color: var(--text);
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+.host-layout {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 12px;
+  height: 100vh;
+  padding: 12px;
+}
+
+.host-sidebar,
+.host-main {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.host-sidebar {
+  padding: 16px;
+  overflow: auto;
+}
+
+.host-sidebar h1 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+
+.host-sidebar p {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.host-sidebar label {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.host-sidebar span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.host-sidebar input,
+.host-sidebar select {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font-size: 13px;
+}
+
+.host-sidebar button {
+  width: 100%;
+  border: none;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  padding: 10px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.host-sidebar button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.host-sidebar button:disabled {
+  opacity: 0.7;
+  cursor: wait;
+}
+
+.status {
+  margin-top: 12px;
+  min-height: 24px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.status[data-error="1"] {
+  color: var(--danger);
+}
+
+.host-main {
+  display: grid;
+  grid-template-columns: 1fr 420px;
+  min-width: 0;
+}
+
+.office-mount {
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+
+#panel-frame {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+@media (max-width: 1180px) {
+  .host-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .host-main {
+    grid-template-columns: 1fr;
+    grid-template-rows: 55vh 45vh;
+  }
+
+  .office-mount {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+}
+

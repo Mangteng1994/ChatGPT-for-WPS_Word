@@ -51,3 +51,10 @@
   - `CODEX_CLI_PATH`（默认 `codex`）
   - `CODEX_BRIDGE_HOST`（默认 `127.0.0.1`）
   - `CODEX_BRIDGE_PORT`（默认 `32123`）
+
+## Host Integration (WebOffice)
+
+- 提供 `host.html` 作为本地调试宿主页：
+  - 负责初始化 `WebOfficeSDK.init({ officeType, appId, fileId, mount })`
+  - `await instance.ready()` 后将 `instance` 注入 `index.html` 面板 iframe
+- 面板不负责初始化 SDK，仅消费注入的 `window.instance`

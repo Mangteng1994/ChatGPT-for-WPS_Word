@@ -35,4 +35,8 @@ docs/                      # 设计文档
    - `npm run bridge:dev`
 4. 启动前端调试页：
    - `npm run panel:dev`
-5. 打开 `http://127.0.0.1:5173`，注入 WebOffice `instance` 后测试三按钮流程。
+5. 两种前端调试方式：
+   - 仅面板页：`http://127.0.0.1:5173/index.html`（需外部手动注入 `window.instance`）
+   - 宿主页（推荐）：`http://127.0.0.1:5173/host.html`
+     - 填 `SDK URL`、`appId`、`fileId`
+     - 点击“初始化并注入”后，宿主页会将 `instance` 注入右侧面板 iframe

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebOffice Host - Codex for WPS Word</title>
+  </head>
+  <body>
+    <div class="host-layout">
+      <aside class="host-sidebar">
+        <h1>WebOffice Host</h1>
+        <p>初始化文档实例后，会自动注入到右侧面板页用于测试。</p>
+        <label>
+          <span>SDK URL（UMD）</span>
+          <input id="sdk-url" type="text" placeholder="例如：/web-office-sdk.umd.js" />
+        </label>
+        <label>
+          <span>App ID</span>
+          <input id="app-id" type="text" placeholder="你的 appId" />
+        </label>
+        <label>
+          <span>File ID</span>
+          <input id="file-id" type="text" placeholder="你的 fileId" />
+        </label>
+        <label>
+          <span>Office Type</span>
+          <select id="office-type">
+            <option value="Writer">Writer (Word)</option>
+            <option value="Spreadsheet">Spreadsheet</option>
+            <option value="Presentation">Presentation</option>
+            <option value="PDF">PDF</option>
+          </select>
+        </label>
+        <button id="init-instance" type="button">初始化并注入</button>
+        <div id="host-status" class="status" data-error="0"></div>
+      </aside>
+      <section class="host-main">
+        <div id="office-mount" class="office-mount"></div>
+        <iframe id="panel-frame" src="/index.html" title="Codex Panel"></iframe>
+      </section>
+    </div>
+    <script type="module" src="/src/host.ts"></script>
+  </body>
+</html>
+
