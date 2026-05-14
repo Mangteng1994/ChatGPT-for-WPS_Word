@@ -1,17 +1,14 @@
 const DEFAULT_PANEL_URL = "http://127.0.0.1:5173/index.html";
-const PROJECT_ROOT = "E:\\G_Disk\\CodeTest\\codex_for_word\\codex-for-wps-word";
+const SERVICE_ACTION_PATH_PREFIX = "/__codex/service/";
 const TASKPANE_KEY = "codex_taskpane_id";
 const TASKPANE_URL_KEY = "codex_taskpane_url";
 const PANEL_URL_KEY = "codex_panel_url";
-const START_SCRIPT_PATH = PROJECT_ROOT + "\\scripts\\start-local-services.ps1";
-const STOP_SCRIPT_PATH = PROJECT_ROOT + "\\scripts\\stop-local-services.ps1";
-const CHECK_SCRIPT_PATH = PROJECT_ROOT + "\\scripts\\check-local-services.ps1";
-const SERVICE_LOG_DIR = PROJECT_ROOT + "\\logs";
 const PANEL_START_DELAY_MS = 6000;
 const SERVICE_STATUS_DELAY_MS = 9000;
 let openPanelTimer = null;
 let openingPanel = false;
 let cachedTaskPane = null;
+let serviceLogDir = "logs";
 
 function getApp() {
   return window.Application || window.wps || null;
@@ -142,25 +139,54 @@ function OnAddinLoad(ribbonUI) {
   return true;
 }
 
-function runPowerShellScript(scriptPath) {
-  const app = getApp();
-  const command = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + scriptPath + '"';
-  app.OAAssist.ShellExecute(command);
+function buildServiceActionUrl(action) {
+  return getUrlBase() + SERVICE_ACTION_PATH_PREFIX + encodeURIComponent(action);
 }
 
-function runPowerShellCommand(commandText) {
-  const app = getApp();
-  app.OAAssist.ShellExecute('powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' + commandText + '"');
+function requestServiceAction(action, callback) {
+  const xhr = new XMLHttpRequest();
+  xhr.open("POST", buildServiceActionUrl(action), true);
+  xhr.setRequestHeader("Content-Type", "application/json");
+  xhr.onreadystatechange = function () {
+    if (xhr.readyState !== 4) return;
+
+    const status = xhr.status === 1223 ? 204 : xhr.status;
+    let payload = null;
+    try {
+      payload = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+    } catch (_error) {
+    }
+
+    if (payload && payload.logDir) {
+      serviceLogDir = payload.logDir;
+    }
+
+    if (status >= 200 && status < 300 && payload && payload.ok) {
+      callback(null, payload);
+      return;
+    }
+
+    const errorText = (payload && payload.error) || ("HTTP " + status);
+    callback(new Error(errorText), payload);
+  };
+
+  try {
+    xhr.send("{}");
+  } catch (error) {
+    callback(error, null);
+  }
 }
 
 function scheduleServiceStatusReport() {
   setTimeout(function () {
-    const statusPath = SERVICE_LOG_DIR + "\\last-service-check.txt";
-    const command = "Add-Type -AssemblyName System.Windows.Forms; " +
-      "& '" + CHECK_SCRIPT_PATH + "' *> '" + statusPath + "'; " +
-      "$text = Get-Content -LiteralPath '" + statusPath + "' -Raw; " +
-      "[System.Windows.Forms.MessageBox]::Show($text, 'Codex 本地服务状态') | Out-Null";
-    runPowerShellCommand(command);
+    requestServiceAction("check", function (error, payload) {
+      if (error) {
+        alert("读取本地服务状态失败：" + error.message + "\n日志目录: " + serviceLogDir);
+        return;
+      }
+      const text = (payload && payload.output) || "未返回状态文本。";
+      alert("Codex 本地服务状态\n\n" + text);
+    });
   }, SERVICE_STATUS_DELAY_MS);
 }
 
@@ -172,23 +198,33 @@ function OnAction(control) {
   }
 
   if (control.Id === "btnStartServices") {
-    runPowerShellScript(START_SCRIPT_PATH);
-    alert("已开始启动本地服务，稍后会显示健康检查结果。日志目录: " + SERVICE_LOG_DIR);
-    scheduleServiceStatusReport();
+    requestServiceAction("start", function (error) {
+      if (error) {
+        alert("启动本地服务失败：" + error.message + "\n日志目录: " + serviceLogDir);
+        return;
+      }
+      alert("已开始启动本地服务，稍后会显示健康检查结果。日志目录: " + serviceLogDir);
+      scheduleServiceStatusReport();
+    });
     return true;
   }
 
   if (control.Id === "btnStopServices") {
-    runPowerShellScript(STOP_SCRIPT_PATH);
-    const taskpaneId = app.PluginStorage.getItem(TASKPANE_KEY);
-    if (taskpaneId) {
-      try {
-        const pane = app.GetTaskPane(taskpaneId);
-        if (pane) pane.Visible = false;
-      } catch (_error) {
+    requestServiceAction("stop", function (error) {
+      if (error) {
+        alert("关闭本地服务失败：" + error.message + "\n日志目录: " + serviceLogDir);
+        return;
       }
-    }
-    alert("已尝试关闭 bridge 和面板服务。");
+      const taskpaneId = app.PluginStorage.getItem(TASKPANE_KEY);
+      if (taskpaneId) {
+        try {
+          const pane = app.GetTaskPane(taskpaneId);
+          if (pane) pane.Visible = false;
+        } catch (_error) {
+        }
+      }
+      alert("已尝试关闭 bridge 和面板服务。");
+    });
     return true;
   }
 
@@ -219,7 +255,8 @@ function OnAction(control) {
     }
 
     openingPanel = true;
-    runPowerShellScript(START_SCRIPT_PATH);
+    requestServiceAction("start", function (_error) {
+    });
     if (openPanelTimer) {
       clearTimeout(openPanelTimer);
       openPanelTimer = null;

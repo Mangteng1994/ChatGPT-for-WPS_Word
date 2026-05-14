@@ -1,10 +1,18 @@
 import { createServer } from "node:http";
+import { execFile } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const rootDir = path.resolve(__dirname, "..", "apps", "wps-local-addin");
+const projectRootDir = path.resolve(__dirname, "..");
+const addinRootDir = path.resolve(projectRootDir, "apps", "wps-local-addin");
+const scriptPaths = {
+  start: path.resolve(projectRootDir, "scripts", "start-local-services.ps1"),
+  stop: path.resolve(projectRootDir, "scripts", "stop-local-services.ps1"),
+  check: path.resolve(projectRootDir, "scripts", "check-local-services.ps1"),
+};
+const serviceLogDir = path.resolve(projectRootDir, "logs");
 const host = "127.0.0.1";
 const port = Number(process.env.WPS_ADDON_PORT || 3889);
 
@@ -26,8 +34,8 @@ const MIME_TYPES = {
 function safePathFromUrl(urlPath) {
   const pathname = decodeURIComponent((urlPath || "/").split("?")[0]).replace(/^\/+/, "");
   const normalized = path.normalize(pathname || "index.html");
-  const resolved = path.resolve(rootDir, normalized);
-  if (!resolved.startsWith(rootDir)) return null;
+  const resolved = path.resolve(addinRootDir, normalized);
+  if (!resolved.startsWith(addinRootDir)) return null;
   return resolved;
 }
 
@@ -35,12 +43,72 @@ function resolveFilePath(urlPath) {
   const primary = safePathFromUrl(urlPath);
   if (!primary) return null;
   if (existsSync(primary) && statSync(primary).isFile()) return primary;
-  const fallback = path.resolve(rootDir, "index.html");
+  const fallback = path.resolve(addinRootDir, "index.html");
   return existsSync(fallback) ? fallback : null;
+}
+
+function writeJson(res, statusCode, payload) {
+  res.statusCode = statusCode;
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  res.end(JSON.stringify(payload));
+}
+
+function runPowerShellScript(action, callback) {
+  const scriptPath = scriptPaths[action];
+  if (!scriptPath || !existsSync(scriptPath)) {
+    callback(new Error(`Script not found for action: ${action}`), "");
+    return;
+  }
+
+  execFile(
+    "powershell.exe",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+    {
+      cwd: projectRootDir,
+      windowsHide: true,
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
+    },
+    (error, stdout, stderr) => {
+      const output = `${stdout || ""}${stderr || ""}`.trim();
+      callback(error, output);
+    }
+  );
 }
 
 const server = createServer((req, res) => {
   try {
+    const requestUrl = new URL(req.url || "/", `http://${host}:${port}`);
+    if (requestUrl.pathname.startsWith("/__codex/service/")) {
+      if ((req.method || "").toUpperCase() !== "POST") {
+        writeJson(res, 405, { ok: false, error: "Method Not Allowed" });
+        return;
+      }
+
+      const action = requestUrl.pathname.replace("/__codex/service/", "").trim();
+      runPowerShellScript(action, (error, output) => {
+        if (error) {
+          writeJson(res, 500, {
+            ok: false,
+            action,
+            logDir: serviceLogDir,
+            output,
+            error: error.message || String(error),
+          });
+          return;
+        }
+
+        writeJson(res, 200, {
+          ok: true,
+          action,
+          logDir: serviceLogDir,
+          output,
+        });
+      });
+      return;
+    }
+
     const filePath = resolveFilePath(req.url || "/");
     if (!filePath) {
       res.statusCode = 404;
@@ -61,5 +129,5 @@ const server = createServer((req, res) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`wps-addon-host listening on http://${host}:${port} (root=${rootDir})`);
+  console.log(`wps-addon-host listening on http://${host}:${port} (root=${addinRootDir})`);
 });

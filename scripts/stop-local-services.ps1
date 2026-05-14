@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$ports = @(3889, 32123, 5173, 5174)
+$ports = @(32123, 5173, 5174)
 $connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
   Where-Object { $ports -contains $_.LocalPort }
 
@@ -12,4 +12,4 @@ foreach ($processId in $processIds) {
   Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "Stopped local Codex services on ports: $($ports -join ', ')"
+Write-Host "Stopped local Codex bridge/panel services on ports: $($ports -join ', ')"

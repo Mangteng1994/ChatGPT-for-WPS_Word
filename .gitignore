@@ -8,3 +8,4 @@ logs/
 .DS_Store
 Thumbs.db
 services/codex-bridge/config.local.json
+apps/wps-local-addin/.debugTemp/
