@@ -7,20 +7,344 @@
   </head>
   <body>
     <main class="panel">
-      <h1>Codex for WPS Word</h1>
-      <p class="hint">选择操作后会调用本地 bridge，并将结果写回当前文档。</p>
-      <label class="field">
-        <span>附加指令（可选）</span>
-        <textarea id="instruction" rows="4" placeholder="例如：保持正式语气，压缩到 120 字以内"></textarea>
-      </label>
-      <div class="actions">
-        <button id="action-rewrite" type="button">改写选区</button>
-        <button id="action-summary" type="button">摘要选区</button>
-        <button id="action-insert" type="button">插入到光标后</button>
-      </div>
+      <header class="panel-header">
+        <div class="brand-block">
+          <h1>Codex</h1>
+          <p class="brand-kicker">WPS Word</p>
+          <nav class="header-actions" aria-label="快捷控制">
+            <button id="new-chat-session" class="icon-button" type="button" title="新建会话">＋</button>
+            <button id="manage-chat-sessions" class="icon-button" type="button" title="会话管理">⧉</button>
+            <button id="open-style-tool" class="icon-button" type="button" title="样式处理">⌗</button>
+            <button id="settings-toggle" class="icon-button" type="button" title="设置">⚙</button>
+            <button id="close-panel" class="icon-button" type="button" title="关闭面板">↗</button>
+          </nav>
+        </div>
+      </header>
+
+      <section id="session-manager-page" class="session-manager" hidden>
+        <div class="session-manager-fixed">
+          <div class="session-manager-top">
+            <div>
+              <span class="section-title">会话中心</span>
+              <div id="session-document-label" class="session-document-label">当前文档：未绑定</div>
+            </div>
+            <div class="session-manager-actions">
+              <button id="session-manage-mode-toggle" class="button-secondary" type="button">多选删除</button>
+              <button id="session-select-all" class="button-secondary" type="button" hidden>全选</button>
+              <button id="session-delete-selected" class="button-danger" type="button" hidden disabled>删除(0)</button>
+              <button id="session-open-selected" class="button-secondary" type="button">进入会话</button>
+              <button id="session-back-chat" class="button-secondary" type="button">返回对话</button>
+            </div>
+          </div>
+          <div class="session-manager-search-row">
+            <input id="session-search" type="text" placeholder="搜索会话标题、文档名或消息内容" />
+            <div id="session-count-summary" class="session-count-summary"></div>
+          </div>
+        </div>
+        <div id="session-list" class="session-list" aria-label="历史会话列表"></div>
+      </section>
+
+      <section id="style-tool-page" class="style-tool-page" hidden>
+        <div class="style-tool-page__fixed">
+          <div class="style-tool__header">
+            <div>
+              <span class="section-title">样式批量处理</span>
+              <div class="session-document-label">按页码范围批量处理指定对象类型文字。</div>
+            </div>
+            <div class="style-tool-page__actions">
+              <button id="refresh-style-options" class="button-secondary" type="button">刷新样式</button>
+              <button id="back-to-chat-from-style" class="button-secondary" type="button">返回对话</button>
+            </div>
+          </div>
+        </div>
+        <div class="style-tool-page__body">
+          <section class="style-tool style-tool--inspect" aria-label="样式读取与描述">
+            <div class="style-tool__sub-title">读取光标/所选内容样式并转自然语言</div>
+            <div class="style-tool__actions style-tool__actions--end">
+              <button id="inspect-style-selection" type="button">读取所选内容样式</button>
+            </div>
+            <label>
+              <span>自然语言描述</span>
+              <textarea id="style-inspect-nl-output" class="style-inspect-output" rows="6" readonly></textarea>
+            </label>
+          </section>
+          <section class="style-tool style-tool--nl" aria-label="自然语言样式集">
+            <div class="style-tool__sub-title">自然语言创建/更新样式集</div>
+            <label>
+              <span>样式要求</span>
+              <textarea
+                id="style-nl-input"
+                rows="8"
+                placeholder="示例：一级标题：基于无样式，三号加粗，中文宋体，英文和复杂字体 Times New Roman，1.5 倍行距，其余都是 0，定义网格。编号后使用空格，不使用制表符。"
+              ></textarea>
+            </label>
+            <div class="style-prompt-lib">
+              <div class="style-prompt-lib__title">样式集提示词库</div>
+              <div class="style-prompt-lib__grid">
+                <label>
+                  <span>模板选择</span>
+                  <select id="style-prompt-template-select">
+                    <option value="">请选择模板</option>
+                  </select>
+                </label>
+              </div>
+              <div class="style-prompt-lib__actions">
+                <button id="style-prompt-create" class="button-secondary" type="button">新建</button>
+                <button id="style-prompt-update" class="button-secondary" type="button">修改</button>
+                <button id="style-prompt-delete" class="button-secondary" type="button">删除</button>
+                <button id="style-prompt-use" class="button-secondary" type="button">引用</button>
+              </div>
+            </div>
+            <div class="style-tool__actions style-tool__actions--end">
+              <button id="apply-style-nl" type="button">创建/更新样式集</button>
+            </div>
+          </section>
+          <section class="style-tool" aria-label="样式批量处理">
+            <div class="style-tool__grid">
+              <label>
+                <span>起始页码</span>
+                <input id="style-page-from" type="number" min="1" step="1" placeholder="如 1" />
+              </label>
+              <label>
+                <span>结束页码</span>
+                <input id="style-page-to" type="number" min="1" step="1" placeholder="如 5" />
+              </label>
+              <label>
+                <span>对象类型</span>
+                <select id="style-target-type">
+                  <option value="image-paragraph">图片所在段落</option>
+                  <option value="table-text">表格内文字</option>
+                  <option value="other-text">除标题、图片所在段落、表格文字以外所有文字</option>
+                </select>
+              </label>
+              <label>
+                <span>样式名称</span>
+                <input id="style-name" type="text" placeholder="输入或选择样式名称" />
+                <div id="style-name-options" class="style-suggestions" hidden></div>
+              </label>
+            </div>
+            <div class="style-tool__actions">
+              <label class="style-tool__checkbox">
+                <input id="show-all-styles" type="checkbox" />
+                <span>显示全部样式</span>
+              </label>
+              <button id="apply-style-range" type="button">应用样式</button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="chat-page" class="chat">
+        <div class="context-toolbar" aria-label="上下文和动作">
+          <label>
+            <span>上下文范围</span>
+            <select id="context-scope">
+              <option value="selection">当前选区</option>
+              <option value="paragraph">当前段落</option>
+              <option value="heading">当前标题下内容</option>
+              <option value="document">全文摘要</option>
+            </select>
+          </label>
+          <label>
+            <span>预设动作</span>
+            <select id="prompt-preset">
+              <option value="custom">自定义</option>
+              <option value="polish">润色</option>
+              <option value="formal">改正式</option>
+              <option value="compress">压缩</option>
+              <option value="expand">扩写</option>
+              <option value="summary">摘要</option>
+              <option value="translate">翻译</option>
+              <option value="typo">错别字检查</option>
+              <option value="contract-review">合同审查</option>
+              <option value="meeting-minutes">会议纪要</option>
+            </select>
+          </label>
+          <label>
+            <span>能力模式</span>
+            <select id="capability-profile">
+              <option value="word-rewrite">Word 正文</option>
+              <option value="word-review">审阅建议</option>
+              <option value="chat-markdown">Markdown 对话</option>
+            </select>
+          </label>
+        </div>
+        <div id="chat-log" class="chat-log" aria-live="polite"></div>
+
+        <div class="run-controls" aria-label="运行参数">
+          <label>
+            <span>模式</span>
+            <select id="mode">
+              <option value="ask">ask</option>
+              <option value="agent">agent</option>
+            </select>
+          </label>
+          <label>
+            <span>模型</span>
+            <select id="model"></select>
+          </label>
+          <label>
+            <span>思考</span>
+            <select id="reasoning-effort">
+              <option value="">默认</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+            </select>
+          </label>
+        </div>
+
+        <div id="attachment-tray" class="attachment-tray" hidden></div>
+
+        <div class="chat-input-row">
+          <div class="composer">
+            <textarea
+              id="chat-input"
+              rows="5"
+              placeholder="输入消息...（可拖入文档、块或粘贴图片）"
+            ></textarea>
+            <button id="chat-send" class="send-toggle" type="button" title="发送消息" aria-label="发送消息">➤</button>
+          </div>
+          <button id="chat-stop" class="button-secondary visually-hidden" type="button" disabled>停止</button>
+        </div>
+
+        <nav class="chat-tools" aria-label="文档动作">
+          <button id="chat-apply-selection" class="tool-icon" type="button" disabled title="写回选区">⇱</button>
+          <button id="chat-insert-text" class="tool-icon" type="button" disabled title="插入回复">⌁</button>
+          <button id="chat-insert-image" class="tool-icon" type="button" disabled title="插入插图">⌕</button>
+          <button id="chat-upload-image" class="tool-icon" type="button" title="上传文件">⇧</button>
+          <input id="chat-image-file" type="file" multiple hidden />
+        </nav>
+      </section>
+
       <div id="status" class="status" data-error="0"></div>
     </main>
+
+    <div id="session-context-menu" class="session-context-menu" hidden>
+      <button type="button" data-action="pin">置顶会话</button>
+      <button type="button" data-action="rename">重命名</button>
+      <button type="button" data-action="export">导出</button>
+      <button type="button" data-action="delete" class="danger">删除</button>
+    </div>
+
+    <section id="session-rename-dialog" class="overlay-dialog" hidden>
+      <div class="overlay-backdrop" data-close="1"></div>
+      <div class="overlay-panel" role="dialog" aria-modal="true" aria-labelledby="rename-title">
+        <header>
+          <h2 id="rename-title">重命名会话</h2>
+        </header>
+        <label>
+          <span>会话标题</span>
+          <input id="session-rename-input" type="text" maxlength="64" />
+        </label>
+        <footer>
+          <button id="session-rename-cancel" class="button-secondary" type="button">取消</button>
+          <button id="session-rename-confirm" type="button">保存</button>
+        </footer>
+      </div>
+    </section>
+
+    <section id="style-prompt-editor-dialog" class="overlay-dialog" hidden>
+      <div class="overlay-backdrop" data-close="1"></div>
+      <div class="overlay-panel overlay-panel--wide" role="dialog" aria-modal="true" aria-labelledby="style-prompt-editor-title">
+        <header>
+          <h2 id="style-prompt-editor-title">新建样式模板</h2>
+        </header>
+        <label>
+          <span>模板名称</span>
+          <input id="style-prompt-editor-name" type="text" maxlength="64" placeholder="如：公文标题样式规范" />
+        </label>
+        <label>
+          <span>模板样式要求</span>
+          <textarea
+            id="style-prompt-editor-content"
+            rows="8"
+            placeholder="输入模板的自然语言样式要求，保存后可引用到样式要求。"
+          ></textarea>
+        </label>
+        <footer>
+          <button id="style-prompt-editor-cancel" class="button-secondary" type="button">取消</button>
+          <button id="style-prompt-editor-confirm" type="button">保存</button>
+        </footer>
+      </div>
+    </section>
+
+    <aside id="settings-panel" class="settings-panel" hidden>
+      <div class="settings-backdrop" data-close="1"></div>
+      <section class="settings-sheet" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <header class="settings-header">
+          <div>
+            <h2 id="settings-title">执行设置</h2>
+            <p>参考 Siyuan Copilot 的分区设置交互，支持草稿态和自动保存。</p>
+          </div>
+          <button id="settings-close" class="button-secondary" type="button">关闭</button>
+        </header>
+        <div class="settings-body">
+          <div class="settings-row">
+            <div class="settings-label">
+              <strong>Codex CLI 路径</strong>
+              <p>建议指向 `codex.cmd` 或 `codex.exe`。</p>
+            </div>
+            <div class="settings-control">
+              <input id="cli-path" type="text" placeholder="自动嗅探 codex.cmd / codex.exe" />
+              <button id="detect-cli" class="button-secondary" type="button">自动嗅探</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">
+              <strong>工作目录</strong>
+              <p>用于 agent/codex 的上下文根目录。</p>
+            </div>
+            <div class="settings-control">
+              <input id="working-dir" type="text" placeholder="如 E:\\project" />
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">
+              <strong>模型列表</strong>
+              <p>重新拉取可用模型列表并刷新顶部模型下拉框。</p>
+            </div>
+            <div class="settings-control">
+              <button id="refresh-models" class="button-secondary" type="button">拉取模型</button>
+            </div>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label">
+              <strong>保存策略</strong>
+              <p><span id="settings-dirty">无未保存修改</span> · <span id="settings-last-saved">尚未保存</span></p>
+            </div>
+            <div class="settings-control settings-control--inline">
+              <label class="switch-line">
+                <input id="settings-autosave" type="checkbox" checked />
+                <span>输入后自动保存（500ms）</span>
+              </label>
+              <button id="settings-reset" class="button-secondary" type="button">撤销改动</button>
+              <button id="save-config" type="button">立即保存</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </aside>
+
+    <div id="diff-modal" class="diff-modal" hidden aria-hidden="true">
+      <div class="diff-modal__backdrop"></div>
+      <section class="diff-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="diff-title">
+        <header class="diff-modal__header">
+          <div>
+            <h2 id="diff-title">写回确认</h2>
+            <p id="diff-description" class="hint">请先确认差异，再决定是否写回当前选区。</p>
+          </div>
+        </header>
+        <div id="diff-content" class="diff-content" aria-live="polite"></div>
+        <footer class="diff-modal__actions">
+          <button id="diff-copy" class="button-secondary" type="button">复制新文本</button>
+          <button id="diff-cancel" class="button-secondary" type="button">拒绝</button>
+          <button id="diff-confirm" type="button">接受并写回</button>
+        </footer>
+      </section>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
-

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<JsPlugin>
+  <ApiVersion>1.0.0</ApiVersion>
+  <Name>CodexForWpsWord</Name>
+  <Description>Codex assistant panel for local WPS Word documents.</Description>
+</JsPlugin>

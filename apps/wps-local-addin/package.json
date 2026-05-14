@@ -1,0 +1,14 @@
+{
+	"name": "codex-for-wps-word-local-addin",
+	"private": true,
+	"version": "0.1.0",
+	"description": "Local WPS JS add-in wrapper for Codex panel",
+	"addonType": "wps",
+	"scripts": {
+		"debug": "wpsjs debug",
+		"build": "wpsjs build"
+	},
+	"devDependencies": {
+		"wpsjs": "^2.2.3"
+	}
+}

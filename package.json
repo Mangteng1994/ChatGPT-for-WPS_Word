@@ -5,7 +5,20 @@
   "description": "Personal Codex assistant for WPS Word",
   "scripts": {
     "bridge:dev": "tsx services/codex-bridge/src/server.ts",
-    "panel:dev": "vite apps/wps-panel --host 127.0.0.1 --port 5173"
+    "panel:dev": "vite apps/wps-panel --host 127.0.0.1 --port 5173 --strictPort",
+    "addin:host": "node scripts/wps-addon-host.mjs",
+    "addin:register": "powershell -ExecutionPolicy Bypass -File scripts/register-wps-addin.ps1",
+    "install:wps-codex": "powershell -ExecutionPolicy Bypass -File scripts/install-wps-codex.ps1",
+    "local:addin:install": "npm --prefix apps/wps-local-addin install",
+    "local:addin:debug": "npm --prefix apps/wps-local-addin run debug --",
+    "repair:wps-codex": "powershell -ExecutionPolicy Bypass -File scripts/repair-wps-codex.ps1",
+    "start:wps-codex": "powershell -ExecutionPolicy Bypass -File scripts/start-wps-codex.ps1",
+    "stop:wps-codex": "powershell -ExecutionPolicy Bypass -File scripts/stop-local-services.ps1",
+    "uninstall:wps-codex": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-wps-codex.ps1",
+    "test:style-nl": "tsx apps/wps-panel/src/style-nl-parser.test.ts",
+    "test:style-nl-generic": "tsx apps/wps-panel/src/style-nl-generic.test.ts",
+    "test:style-inspect": "tsx apps/wps-panel/src/style-inspector.test.ts",
+    "test:style-all": "npm run test:style-nl && npm run test:style-nl-generic && npm run test:style-inspect"
   },
   "devDependencies": {
     "tsx": "^4.20.6",
