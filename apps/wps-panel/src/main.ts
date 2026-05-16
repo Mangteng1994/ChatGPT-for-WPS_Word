@@ -29,6 +29,7 @@ import {
 } from "./session-store";
 import {
   applyNaturalLanguageStyleSet,
+  applyQuoteFontByPageRange,
   applyStyleByPageRange,
   describeSelectionStyle,
   getCurrentParagraphText,
@@ -147,9 +148,11 @@ const stylePageFromEl = document.querySelector<HTMLInputElement>("#style-page-fr
 const stylePageToEl = document.querySelector<HTMLInputElement>("#style-page-to");
 const styleTargetTypeEl = document.querySelector<HTMLSelectElement>("#style-target-type");
 const styleNameEl = document.querySelector<HTMLInputElement>("#style-name");
+const styleQuoteFontEl = document.querySelector<HTMLInputElement>("#style-quote-font");
 const styleNameOptionsEl = document.querySelector<HTMLDivElement>("#style-name-options");
 const showAllStylesEl = document.querySelector<HTMLInputElement>("#show-all-styles");
 const applyStyleRangeBtn = document.querySelector<HTMLButtonElement>("#apply-style-range");
+const applyQuoteFontRangeBtn = document.querySelector<HTMLButtonElement>("#apply-quote-font-range");
 const styleNlInputEl = document.querySelector<HTMLTextAreaElement>("#style-nl-input");
 const applyStyleNlBtn = document.querySelector<HTMLButtonElement>("#apply-style-nl");
 const inspectStyleSelectionBtn = document.querySelector<HTMLButtonElement>("#inspect-style-selection");
@@ -289,7 +292,9 @@ function selectedCapabilityProfile(): CapabilityProfileId {
 
 function selectedStyleTargetType(): StyleTargetType {
   const value = String(styleTargetTypeEl?.value || "image-paragraph");
-  return ["image-paragraph", "table-text", "other-text"].includes(value) ? (value as StyleTargetType) : "image-paragraph";
+  return ["image-paragraph", "image-caption", "table-text", "other-text"].includes(value)
+    ? (value as StyleTargetType)
+    : "image-paragraph";
 }
 
 async function getApplication(): Promise<any> {
@@ -1077,6 +1082,7 @@ async function applyStyleRange(): Promise<void> {
     throw new Error("请先选择样式名称。");
   }
 
+  setStatus("正在按页码与对象类型处理样式，请稍候...");
   const app = await getApplication();
   const result = await applyStyleByPageRange(app, {
     pageFrom,
@@ -1085,6 +1091,30 @@ async function applyStyleRange(): Promise<void> {
     targetType: selectedStyleTargetType(),
   });
   setStatus(`样式处理完成：命中 ${result.matched} 项，成功 ${result.updated} 项，跳过 ${result.skipped} 项。`, result.updated === 0);
+}
+
+async function applyQuoteFontRange(): Promise<void> {
+  const pageFrom = Number(stylePageFromEl?.value || 0);
+  const pageTo = Number(stylePageToEl?.value || 0);
+  if (!Number.isFinite(pageFrom) || pageFrom <= 0 || !Number.isFinite(pageTo) || pageTo <= 0) {
+    throw new Error("请填写有效的页码范围。");
+  }
+  if (pageTo < pageFrom) {
+    throw new Error("结束页码不能小于起始页码。");
+  }
+
+  const fontName = String(styleQuoteFontEl?.value || "").trim();
+  if (!fontName) {
+    throw new Error("请先输入引号字体名称。");
+  }
+
+  const app = await getApplication();
+  const result = await applyQuoteFontByPageRange(app, {
+    pageFrom,
+    pageTo,
+    fontName,
+  });
+  setStatus(`引号字体处理完成：命中 ${result.matched} 个引号，成功 ${result.updated} 个，跳过 ${result.skipped} 个。`, result.updated === 0);
 }
 
 async function applyStyleSetByNaturalLanguage(): Promise<void> {
@@ -2005,6 +2035,18 @@ applyStyleRangeBtn?.addEventListener("click", () => {
     try {
       setBusy(true);
       await applyStyleRange();
+    } catch (error) {
+      setStatus((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  })();
+});
+applyQuoteFontRangeBtn?.addEventListener("click", () => {
+  void (async () => {
+    try {
+      setBusy(true);
+      await applyQuoteFontRange();
     } catch (error) {
       setStatus((error as Error).message, true);
     } finally {

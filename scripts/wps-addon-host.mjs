@@ -87,6 +87,15 @@ const server = createServer((req, res) => {
       }
 
       const action = requestUrl.pathname.replace("/__codex/service/", "").trim();
+      if (action === "ping") {
+        writeJson(res, 200, {
+          ok: true,
+          action,
+          logDir: serviceLogDir,
+          output: "pong",
+        });
+        return;
+      }
       runPowerShellScript(action, (error, output) => {
         if (error) {
           writeJson(res, 500, {

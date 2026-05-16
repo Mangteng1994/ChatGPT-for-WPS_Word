@@ -27,22 +27,43 @@ function Test-Port([int]$Port) {
   }
 }
 
-function Test-HttpContent([string]$Url, [string]$Expected) {
+function Test-HttpContent(
+  [string]$Url,
+  [string]$Expected,
+  [string]$Method = "GET",
+  [string]$Body = ""
+) {
   try {
-    $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 3
+    $params = @{
+      Uri = $Url
+      UseBasicParsing = $true
+      TimeoutSec = 3
+      Method = $Method
+    }
+    if ($Method -ne "GET" -and $Method -ne "HEAD") {
+      $params.Body = $Body
+      $params.ContentType = "application/json"
+    }
+    $response = Invoke-WebRequest @params
     return ($response.StatusCode -eq 200 -and ([string]$response.Content).Contains($Expected))
   } catch {
     return $false
   }
 }
 
-function Wait-ServiceHealthy([string]$Url, [string]$Expected, [int]$TimeoutSeconds) {
+function Wait-ServiceHealthy(
+  [string]$Url,
+  [string]$Expected,
+  [int]$TimeoutSeconds,
+  [string]$Method = "GET",
+  [string]$Body = ""
+) {
   $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
   while ((Get-Date) -lt $deadline) {
-    if (Test-HttpContent $Url $Expected) { return $true }
+    if (Test-HttpContent $Url $Expected $Method $Body) { return $true }
     Start-Sleep -Milliseconds 500
   }
-  return (Test-HttpContent $Url $Expected)
+  return (Test-HttpContent $Url $Expected $Method $Body)
 }
 
 function Get-PortOwner([int]$Port) {
@@ -149,18 +170,20 @@ if (Test-Path -LiteralPath $registerScript) {
 }
 
 $serviceChecks = @(
-  @{ Name = "WPS add-in host"; Port = 3889; Url = "http://127.0.0.1:3889/"; Expected = "Codex Local Addin Entry"; Starter = "addin" },
+  @{ Name = "WPS add-in host"; Port = 3889; Url = "http://127.0.0.1:3889/__codex/service/ping"; Method = "POST"; Body = "{}"; Expected = '"ok":true'; Starter = "addin" },
   @{ Name = "codex bridge"; Port = 32123; Url = "http://127.0.0.1:32123/health"; Expected = '"service":"codex-bridge"'; Starter = "bridge" },
   @{ Name = "WPS panel"; Port = 5173; Url = "http://127.0.0.1:5173/index.html"; Expected = "Codex for WPS Word"; Starter = "panel" }
 )
 
 foreach ($service in $serviceChecks) {
-  if ((Test-Port $service.Port) -and -not (Test-HttpContent $service.Url $service.Expected)) {
+  $method = if ($service.Method) { [string]$service.Method } else { "GET" }
+  $body = if ($service.Body) { [string]$service.Body } else { "" }
+  if ((Test-Port $service.Port) -and -not (Test-HttpContent $service.Url $service.Expected $method $body)) {
     Clear-StaleProjectProcess $service.Port $service.Name
   }
 }
 
-if (-not (Test-HttpContent "http://127.0.0.1:3889/" "Codex Local Addin Entry")) {
+if (-not (Test-HttpContent "http://127.0.0.1:3889/__codex/service/ping" '"ok":true' "POST" "{}")) {
   Start-AddonHost
 } else {
   Write-Log "WPS add-in host is already healthy on port 3889"
@@ -180,7 +203,9 @@ if (-not (Test-HttpContent "http://127.0.0.1:5173/index.html" "Codex for WPS Wor
 
 $failed = @()
 foreach ($check in $serviceChecks) {
-  if (Wait-ServiceHealthy $check.Url $check.Expected 20) {
+  $method = if ($check.Method) { [string]$check.Method } else { "GET" }
+  $body = if ($check.Body) { [string]$check.Body } else { "" }
+  if (Wait-ServiceHealthy $check.Url $check.Expected 20 $method $body) {
     Write-Log "$($check.Name) is healthy at $($check.Url)"
   } else {
     $owner = Get-PortOwner $check.Port

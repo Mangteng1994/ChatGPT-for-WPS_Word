@@ -1,4 +1,5 @@
 import type { NumberingSuffix } from "./style-nl-parser";
+import type { LengthValue } from "./length-units";
 
 export type StyleInspectTarget = "cursorParagraph" | "selectionSingleParagraph" | "selectionMultiParagraph";
 export type StyleType = "paragraph" | "character" | "table" | "list" | "unknown";
@@ -50,11 +51,19 @@ export interface RawParagraphInfo {
   lineSpacingRule: number | null;
   lineSpacing: number | null;
   beforePt: number | null;
+  before: LengthValue | null;
   afterPt: number | null;
+  after: LengthValue | null;
   leftIndent: number | null;
+  leftIndentValue: LengthValue | null;
+  leftIndentChars: number | null;
   rightIndent: number | null;
+  rightIndentValue: LengthValue | null;
+  rightIndentChars: number | null;
   firstLineIndent: number | null;
+  firstLineIndentValue: LengthValue | null;
   firstLineIndentChars: number | null;
+  hangingIndentValue: LengthValue | null;
   alignment: number | null;
   snapToGrid: number | boolean | null;
 }
@@ -99,12 +108,20 @@ export interface ParagraphStyleInfo {
   lineSpacingRule: LineSpacingRule;
   lineSpacingPt: number | null;
   beforePt: number | null;
+  before: LengthValue | null;
   afterPt: number | null;
+  after: LengthValue | null;
   leftIndent: number | null;
+  leftIndentValue: LengthValue | null;
+  leftIndentChars: number | null;
   rightIndent: number | null;
+  rightIndentValue: LengthValue | null;
+  rightIndentChars: number | null;
   firstLineIndent: number | null;
+  firstLineIndentValue: LengthValue | null;
   firstLineIndentChars: number | null;
   hangingIndent: number | null;
+  hangingIndentValue: LengthValue | null;
   alignment: ParagraphAlignment;
   snapToGrid: boolean | null;
 }

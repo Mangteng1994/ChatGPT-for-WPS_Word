@@ -1,5 +1,6 @@
 const DEFAULT_PANEL_URL = "http://127.0.0.1:5173/index.html";
 const SERVICE_ACTION_PATH_PREFIX = "/__codex/service/";
+const SERVICE_ACTION_ORIGIN_FALLBACKS = ["http://127.0.0.1:3889", "http://localhost:3889"];
 const TASKPANE_KEY = "codex_taskpane_id";
 const TASKPANE_URL_KEY = "codex_taskpane_url";
 const PANEL_URL_KEY = "codex_panel_url";
@@ -139,42 +140,137 @@ function OnAddinLoad(ribbonUI) {
   return true;
 }
 
-function buildServiceActionUrl(action) {
-  return getUrlBase() + SERVICE_ACTION_PATH_PREFIX + encodeURIComponent(action);
+function normalizeBaseUrl(url) {
+  return String(url || "").replace(/\/+$/, "");
+}
+
+function getHttpOrigin() {
+  const loc = window.location || document.location;
+  const protocol = String((loc && loc.protocol) || "").toLowerCase();
+  const host = String((loc && loc.host) || "");
+  if ((protocol === "http:" || protocol === "https:") && host) {
+    return protocol + "//" + host;
+  }
+  const match = /^(https?:\/\/[^\/]+)/i.exec(getUrlBase());
+  return match ? match[1] : "";
+}
+
+function buildServiceActionUrls(action) {
+  const encodedAction = encodeURIComponent(action);
+  const urls = [];
+  const seen = {};
+
+  const candidates = [getHttpOrigin(), getUrlBase()].concat(SERVICE_ACTION_ORIGIN_FALLBACKS);
+  for (let i = 0; i < candidates.length; i += 1) {
+    const base = normalizeBaseUrl(candidates[i]);
+    if (!base) continue;
+    const url = base + SERVICE_ACTION_PATH_PREFIX + encodedAction;
+    if (seen[url]) continue;
+    seen[url] = true;
+    urls.push(url);
+  }
+
+  return urls;
+}
+
+function tryParseJson(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return null;
+  const head = raw.charAt(0);
+  if (head !== "{" && head !== "[") return null;
+  try {
+    return JSON.parse(raw);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function looksLikeHtml(text) {
+  const raw = String(text || "").toLowerCase();
+  return raw.indexOf("<!doctype html") >= 0 || raw.indexOf("<html") >= 0 || raw.indexOf("codex local addin entry") >= 0;
 }
 
 function requestServiceAction(action, callback) {
-  const xhr = new XMLHttpRequest();
-  xhr.open("POST", buildServiceActionUrl(action), true);
-  xhr.setRequestHeader("Content-Type", "application/json");
-  xhr.onreadystatechange = function () {
-    if (xhr.readyState !== 4) return;
+  const urls = buildServiceActionUrls(action);
+  if (!urls.length) {
+    callback(new Error("未解析到本地服务地址。"), null);
+    return;
+  }
 
-    const status = xhr.status === 1223 ? 204 : xhr.status;
-    let payload = null;
-    try {
-      payload = xhr.responseText ? JSON.parse(xhr.responseText) : null;
-    } catch (_error) {
+  let nextIndex = 0;
+  let lastError = null;
+  let sawHttp200Html = false;
+
+  function finishWithError() {
+    if (sawHttp200Html) {
+      callback(new Error("服务接口未就绪（返回了网页）。请运行 repair-wps-codex.cmd 修复加载项地址后重试。"), null);
+      return;
     }
+    callback(lastError || new Error("本地服务接口不可用。"), null);
+  }
 
-    if (payload && payload.logDir) {
-      serviceLogDir = payload.logDir;
-    }
-
-    if (status >= 200 && status < 300 && payload && payload.ok) {
-      callback(null, payload);
+  function requestNext() {
+    if (nextIndex >= urls.length) {
+      finishWithError();
       return;
     }
 
-    const errorText = (payload && payload.error) || ("HTTP " + status);
-    callback(new Error(errorText), payload);
-  };
+    const targetUrl = urls[nextIndex];
+    nextIndex += 1;
 
-  try {
-    xhr.send("{}");
-  } catch (error) {
-    callback(error, null);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", targetUrl, true);
+    xhr.timeout = 8000;
+    xhr.setRequestHeader("Content-Type", "application/json");
+
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4) return;
+
+      const status = xhr.status === 1223 ? 204 : xhr.status;
+      const payload = tryParseJson(xhr.responseText);
+
+      if (payload && payload.logDir) {
+        serviceLogDir = payload.logDir;
+      }
+
+      if (status >= 200 && status < 300 && payload && payload.ok) {
+        callback(null, payload);
+        return;
+      }
+
+      if (status >= 200 && status < 300 && !payload && looksLikeHtml(xhr.responseText)) {
+        sawHttp200Html = true;
+        requestNext();
+        return;
+      }
+
+      if (payload && payload.error) {
+        lastError = new Error(payload.error);
+      } else {
+        lastError = new Error("HTTP " + status);
+      }
+      requestNext();
+    };
+
+    xhr.onerror = function () {
+      lastError = new Error("网络请求失败");
+      requestNext();
+    };
+
+    xhr.ontimeout = function () {
+      lastError = new Error("请求超时");
+      requestNext();
+    };
+
+    try {
+      xhr.send("{}");
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error || "请求失败"));
+      requestNext();
+    }
   }
+
+  requestNext();
 }
 
 function scheduleServiceStatusReport() {

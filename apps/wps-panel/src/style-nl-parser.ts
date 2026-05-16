@@ -1,5 +1,14 @@
 export type HeadingLevel = 1 | 2 | 3 | 4;
 export type NumberingSuffix = "space" | "tab" | "nothing";
+export type NumberingFormat =
+  | "decimal"
+  | "lowerLetter"
+  | "upperLetter"
+  | "lowerRoman"
+  | "upperRoman"
+  | "numberInCircle"
+  | "parenthesizedNumber"
+  | "parenthesizedArabic";
 
 export interface ParsedHeadingStyleTokens {
   basedOnNone: boolean | null;

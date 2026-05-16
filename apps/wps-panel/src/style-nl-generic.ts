@@ -1,4 +1,5 @@
-import { FONT_SIZE_ALIAS_TO_PT, type NumberingSuffix } from "./style-nl-parser";
+import { FONT_SIZE_ALIAS_TO_PT, type NumberingFormat, type NumberingSuffix } from "./style-nl-parser";
+import { convertLengthToPoints, parseLengthValue, type LengthValue } from "./length-units";
 
 export type GenericStyleType = "paragraph" | "character";
 export type GenericParagraphAlignment = "left" | "center" | "right" | "justify" | "distribute" | "unknown";
@@ -26,17 +27,27 @@ export interface StructuredGenericStyleSpec {
     lineSpacing: number | null;
     lineSpacingPt: number | null;
     beforePt: number | null;
+    before: LengthValue | null;
     afterPt: number | null;
+    after: LengthValue | null;
     leftIndent: number | null;
+    leftIndentValue: LengthValue | null;
+    leftIndentChars: number | null;
     rightIndent: number | null;
+    rightIndentValue: LengthValue | null;
+    rightIndentChars: number | null;
     firstLineIndent: number | null;
+    firstLineIndentValue: LengthValue | null;
     firstLineIndentChars: number | null;
+    hangingIndentValue: LengthValue | null;
     alignment: GenericParagraphAlignment;
     snapToGrid: boolean | null;
   };
   numbering: {
     enabled: boolean | null;
     level: number | null;
+    format: NumberingFormat | null;
+    displayFormat: string | null;
     levelText: string | null;
     suffix: NumberingSuffix | null;
   };
@@ -216,48 +227,122 @@ function parseLineSpacing(source: string): { rule: GenericLineSpacingRule; multi
   if (/2(?:\.0+)?\s*倍行距/.test(source)) return { rule: "double", multiple: 2, points: null };
   const multi = /([0-9]+(?:\.[0-9]+)?)\s*倍行距/.exec(source);
   if (multi) return { rule: "multiple", multiple: parseNumber(multi[1]), points: null };
-  const exactly = /固定值\s*([0-9]+(?:\.[0-9]+)?)\s*(?:pt|磅)?/.exec(source);
-  if (exactly) return { rule: "exactly", multiple: null, points: parseNumber(exactly[1]) };
-  const atLeast = /最小值\s*([0-9]+(?:\.[0-9]+)?)\s*(?:pt|磅)?/.exec(source);
-  if (atLeast) return { rule: "atLeast", multiple: null, points: parseNumber(atLeast[1]) };
+  const exactly = /固定值\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?))(?:\s*(pt|磅|in|inch|英寸|cm|厘米|mm|毫米))?/i.exec(source);
+  if (exactly) {
+    const length = parseLengthValue(`${exactly[1]} ${exactly[2] || ""}`.trim(), "pt");
+    return { rule: "exactly", multiple: null, points: convertLengthToPoints(length) };
+  }
+  const atLeast = /最小值\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?))(?:\s*(pt|磅|in|inch|英寸|cm|厘米|mm|毫米))?/i.exec(source);
+  if (atLeast) {
+    const length = parseLengthValue(`${atLeast[1]} ${atLeast[2] || ""}`.trim(), "pt");
+    return { rule: "atLeast", multiple: null, points: convertLengthToPoints(length) };
+  }
   return { rule: "unknown", multiple: null, points: null };
 }
 
-function parseSpacing(source: string): { beforePt: number | null; afterPt: number | null } {
-  const both = /段前段后(?:均为|都为|为)?\s*([0-9]+(?:\.[0-9]+)?)/.exec(source);
+function parseLengthToken(value: string, defaultUnit: "pt" | "char" = "pt"): LengthValue | null {
+  const normalized = normalizeText(value).replace(/个(?=字|字符)/g, "");
+  if (!normalized) return null;
+  const direct = parseLengthValue(normalized, defaultUnit);
+  if (direct) return direct;
+
+  const unitMatch = /^([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十|[零一二两三四五六七八九十]+点[零一二两三四五六七八九]+))(?:\s*(磅|pt|英寸|inch|in|厘米|cm|毫米|mm|字|字符))?$/i.exec(
+    normalized
+  );
+  if (!unitMatch) return null;
+  const numeric = parseNumberLike(unitMatch[1]);
+  if (numeric === null) return null;
+  const unitToken = normalizeText(unitMatch[2]).toLowerCase();
+  let unit: LengthValue["unit"] = defaultUnit;
+  if (unitToken === "磅" || unitToken === "pt") unit = "pt";
+  else if (unitToken === "英寸" || unitToken === "inch" || unitToken === "in") unit = "inch";
+  else if (unitToken === "厘米" || unitToken === "cm") unit = "cm";
+  else if (unitToken === "毫米" || unitToken === "mm") unit = "mm";
+  else if (unitToken === "字" || unitToken === "字符") unit = "char";
+  return { value: numeric, unit };
+}
+
+function parseSpacing(source: string): { beforePt: number | null; afterPt: number | null; before: LengthValue | null; after: LengthValue | null } {
+  const both = /段前段后(?:均为|都为|为)?\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十|[零一二两三四五六七八九十]+点[零一二两三四五六七八九]+)(?:\s*(?:磅|pt|英寸|inch|in|厘米|cm|毫米|mm))?)/i.exec(source);
   if (both) {
-    const value = parseNumber(both[1]);
-    return { beforePt: value, afterPt: value };
+    const value = parseLengthToken(both[1], "pt");
+    return { beforePt: convertLengthToPoints(value), afterPt: convertLengthToPoints(value), before: value, after: value };
   }
-  const before = captureAfter(source, /段前(?:为|：)?\s*([0-9]+(?:\.[0-9]+)?)/);
-  const after = captureAfter(source, /段后(?:为|：)?\s*([0-9]+(?:\.[0-9]+)?)/);
+  const beforeToken = captureAfter(source, /段前(?:为|：)?\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十|[零一二两三四五六七八九十]+点[零一二两三四五六七八九]+)(?:\s*(?:磅|pt|英寸|inch|in|厘米|cm|毫米|mm))?)/i);
+  const afterToken = captureAfter(source, /段后(?:为|：)?\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十|[零一二两三四五六七八九十]+点[零一二两三四五六七八九]+)(?:\s*(?:磅|pt|英寸|inch|in|厘米|cm|毫米|mm))?)/i);
+  const before = beforeToken ? parseLengthToken(beforeToken, "pt") : null;
+  const after = afterToken ? parseLengthToken(afterToken, "pt") : null;
   return {
-    beforePt: before ? parseNumber(before) : null,
-    afterPt: after ? parseNumber(after) : null,
+    beforePt: convertLengthToPoints(before),
+    afterPt: convertLengthToPoints(after),
+    before,
+    after,
   };
 }
 
-function parseIndents(source: string): { left: number | null; right: number | null; firstPt: number | null; firstChars: number | null } {
-  const allZero = /左缩进、右缩进和首行缩进(?:均为|都为|为)\s*([0-9]+(?:\.[0-9]+)?|零)/.exec(source);
+function parseIndents(source: string): {
+  left: number | null;
+  leftValue: LengthValue | null;
+  leftChars: number | null;
+  right: number | null;
+  rightValue: LengthValue | null;
+  rightChars: number | null;
+  firstPt: number | null;
+  firstValue: LengthValue | null;
+  firstChars: number | null;
+  hangingValue: LengthValue | null;
+} {
+  const allZero = /左缩进、右缩进和首行缩进(?:均为|都为|为)\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零)(?:\s*(?:磅|pt|英寸|inch|in|厘米|cm|毫米|mm|字符|字))?)/i.exec(source);
   if (allZero) {
-    const value = parseNumberLike(allZero[1]);
-    return { left: value, right: value, firstPt: value, firstChars: null };
+    const value = parseLengthToken(allZero[1], "pt");
+    const leftChars = value?.unit === "char" ? value.value : null;
+    return {
+      left: convertLengthToPoints(value),
+      leftValue: value,
+      leftChars,
+      right: convertLengthToPoints(value),
+      rightValue: value,
+      rightChars: leftChars,
+      firstPt: value?.unit === "char" ? null : convertLengthToPoints(value),
+      firstValue: value,
+      firstChars: value?.unit === "char" ? value.value : null,
+      hangingValue: null,
+    };
   }
-  const left = captureAfter(source, /左缩进(?:为|：)?\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十))/);
-  const right = captureAfter(source, /右缩进(?:为|：)?\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十))/);
-  const firstChars = captureAfter(
+  const leftToken = captureAfter(source, /左缩进(?:为|：)?\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十|[零一二两三四五六七八九十]+点[零一二两三四五六七八九]+)(?:\s*(?:磅|pt|英寸|inch|in|厘米|cm|毫米|mm|字符|字))?)/i);
+  const rightToken = captureAfter(source, /右缩进(?:为|：)?\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十|[零一二两三四五六七八九十]+点[零一二两三四五六七八九]+)(?:\s*(?:磅|pt|英寸|inch|in|厘米|cm|毫米|mm|字符|字))?)/i);
+  const firstCharsToken = captureAfter(
     source,
-    /首行缩进(?:为|：)?\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十|[零一二两三四五六七八九十]+点[零一二两三四五六七八九]+))(?:个)?\s*(?:字|字符)/
+    /首行缩进(?:为|：)?\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十|[零一二两三四五六七八九十]+点[零一二两三四五六七八九]+)(?:\s*(?:个)?\s*(?:字|字符)))/
   );
-  const first = captureAfter(
+  const firstToken = captureAfter(
     source,
-    /首行缩进(?:为|：)?\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十|[零一二两三四五六七八九十]+点[零一二两三四五六七八九]+))/
+    /首行缩进(?:为|：)?\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十|[零一二两三四五六七八九十]+点[零一二两三四五六七八九]+)(?:\s*(?:磅|pt|英寸|inch|in|厘米|cm|毫米|mm|字符|字))?)/i
   );
+  const hangingToken = captureAfter(
+    source,
+    /悬挂缩进(?:为|：)?\s*([\-]?(?:[0-9]+(?:\.[0-9]+)?|零|一|二|两|三|四|五|六|七|八|九|十|[零一二两三四五六七八九十]+点[零一二两三四五六七八九]+)(?:\s*(?:磅|pt|英寸|inch|in|厘米|cm|毫米|mm|字符|字))?)/i
+  );
+
+  const leftValue = leftToken ? parseLengthToken(leftToken, "pt") : null;
+  const rightValue = rightToken ? parseLengthToken(rightToken, "pt") : null;
+  const firstCharsValue = firstCharsToken ? parseLengthToken(firstCharsToken, "char") : null;
+  const firstValue = firstCharsValue || (firstToken ? parseLengthToken(firstToken, "pt") : null);
+  const hangingValue = hangingToken ? parseLengthToken(hangingToken, "pt") : null;
+  const firstPt = firstValue?.unit === "char" ? null : convertLengthToPoints(firstValue);
+  const hangingPt = hangingValue?.unit === "char" ? null : convertLengthToPoints(hangingValue);
+
   return {
-    left: left ? parseNumberLike(left) : null,
-    right: right ? parseNumberLike(right) : null,
-    firstPt: firstChars ? null : first ? parseNumberLike(first) : null,
-    firstChars: firstChars ? parseNumberLike(firstChars) : null,
+    left: convertLengthToPoints(leftValue),
+    leftValue,
+    leftChars: leftValue?.unit === "char" ? leftValue.value : null,
+    right: convertLengthToPoints(rightValue),
+    rightValue,
+    rightChars: rightValue?.unit === "char" ? rightValue.value : null,
+    firstPt: hangingPt !== null && Number.isFinite(hangingPt) ? -Math.abs(hangingPt) : firstPt,
+    firstValue: hangingValue ? null : firstValue,
+    firstChars: firstValue?.unit === "char" ? firstValue.value : null,
+    hangingValue,
   };
 }
 
@@ -276,6 +361,61 @@ function parseSnapToGrid(source: string): boolean | null {
   return null;
 }
 
+function inferNumberingFormat(displayFormat: string | null): NumberingFormat | null {
+  const source = normalizeText(displayFormat);
+  if (!source) return null;
+  if (/^[①-⑳]$/.test(source)) return "numberInCircle";
+  if (/^[⑴-⒇]$/.test(source)) return "parenthesizedNumber";
+  if (/^[（(]\s*\d+\s*[）)]$/.test(source)) return "parenthesizedArabic";
+  const core = source.replace(/[.)、）]+$/g, "");
+  if (!core) return null;
+  if (/^\d+(?:\.\d+){0,8}$/.test(core)) return "decimal";
+  if (/^[a-z]$/.test(core)) return "lowerLetter";
+  if (/^[A-Z]$/.test(core)) return "upperLetter";
+  if (/^[ivxlcdm]+$/i.test(core)) {
+    if (/^[ivxlcdm]+$/.test(core)) return "lowerRoman";
+    return "upperRoman";
+  }
+  return null;
+}
+
+function inferLevelTextFromDisplayFormat(displayFormat: string | null, level: number | null): string | null {
+  const source = normalizeText(displayFormat);
+  if (!source) return null;
+  if (/^[①-⑳]$/.test(source) || /^[⑴-⒇]$/.test(source)) {
+    return "%1";
+  }
+  if (/^[（(]\s*\d+\s*[）)]$/.test(source)) {
+    const left = source.startsWith("（") ? "（" : "(";
+    const right = source.endsWith("）") ? "）" : ")";
+    return `${left}%1${right}`;
+  }
+  if (/^\d+[）)]$/.test(source)) {
+    const right = source.endsWith("）") ? "）" : ")";
+    return `%1${right}`;
+  }
+
+  const trailingMatch = /([.)、）]+)$/.exec(source);
+  const trailing = trailingMatch?.[1] || "";
+  const core = trailing ? source.slice(0, -trailing.length) : source;
+  if (!core) return null;
+
+  if (/^\d+(?:\.\d+){0,8}$/.test(core)) {
+    const levelCount = core.split(".").length;
+    const prefix = Array.from({ length: levelCount }, (_, idx) => `%${idx + 1}`).join(".");
+    return `${prefix}${trailing}`;
+  }
+
+  if (/^[A-Za-z]$/.test(core) || /^[ivxlcdm]+$/i.test(core)) {
+    return `%1${trailing}`;
+  }
+
+  if (level && level > 0) {
+    return Array.from({ length: level }, (_, idx) => `%${idx + 1}`).join(".");
+  }
+  return null;
+}
+
 function parseNumbering(source: string): StructuredGenericStyleSpec["numbering"] {
   let enabled: boolean | null = null;
   if (/无编号|不编号|不使用编号|没有编号/.test(source)) enabled = false;
@@ -285,11 +425,14 @@ function parseNumbering(source: string): StructuredGenericStyleSpec["numbering"]
   const levelMatch = /(一级|二级|三级|四级|五级|六级|七级|八级|九级)编号/.exec(source);
   if (levelMatch) level = CN_LEVEL_TO_NUMBER[levelMatch[1]] || null;
 
-  const formatMatch = /编号(?:格式)?(?:为|：)\s*([0-9]+(?:\.[0-9]+){0,8})/.exec(source);
-  let levelText: string | null = null;
-  if (formatMatch) {
-    const levelCount = formatMatch[1].split(".").length;
-    levelText = Array.from({ length: levelCount }, (_, idx) => `%${idx + 1}`).join(".");
+  const displayFormatMatch =
+    /格式(?:为|：)\s*([^，。；;\n\s]+)/i.exec(source) ||
+    /编号(?:格式)?(?:为|：)\s*([^，。；;\n\s]+)/i.exec(source);
+  const displayFormat = displayFormatMatch ? normalizeText(displayFormatMatch[1]) : null;
+  const format = inferNumberingFormat(displayFormat);
+  let levelText = inferLevelTextFromDisplayFormat(displayFormat, level);
+  if (!levelText && level && level > 0) {
+    levelText = Array.from({ length: level }, (_, idx) => `%${idx + 1}`).join(".");
   }
 
   let suffix: NumberingSuffix | null = null;
@@ -306,6 +449,8 @@ function parseNumbering(source: string): StructuredGenericStyleSpec["numbering"]
   return {
     enabled,
     level,
+    format,
+    displayFormat,
     levelText,
     suffix,
   };
@@ -362,17 +507,27 @@ function parseStyleSection(name: string, body: string): StructuredGenericStyleSp
       lineSpacing: lineSpacing.multiple,
       lineSpacingPt: lineSpacing.points,
       beforePt: spacing.beforePt,
+      before: spacing.before,
       afterPt: spacing.afterPt,
+      after: spacing.after,
       leftIndent: indents.left,
+      leftIndentValue: indents.leftValue,
+      leftIndentChars: indents.leftChars,
       rightIndent: indents.right,
+      rightIndentValue: indents.rightValue,
+      rightIndentChars: indents.rightChars,
       firstLineIndent: indents.firstPt,
+      firstLineIndentValue: indents.firstValue,
       firstLineIndentChars: indents.firstChars,
+      hangingIndentValue: indents.hangingValue,
       alignment: parseAlignment(source),
       snapToGrid: parseSnapToGrid(source),
     },
     numbering: {
       enabled: numbering.enabled,
       level: numbering.level,
+      format: numbering.format,
+      displayFormat: numbering.displayFormat,
       levelText,
       suffix: numbering.suffix,
     },

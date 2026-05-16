@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { convertRawSelectionStyleSnapshot } from "./style-inspector-converter";
 import { compareParagraphStyles } from "./style-inspector-diff";
 import { buildSelectionStyleDescription } from "./style-inspector-nl";
+import type { LengthValue } from "./length-units";
 import type { RawParagraphStyleSnapshot, RawSelectionStyleSnapshot } from "./style-inspector-types";
 
 type RawParagraphOverrides = Partial<Omit<RawParagraphStyleSnapshot, "style" | "font" | "paragraph" | "numbering">> & {
@@ -37,11 +38,19 @@ function makeRawParagraph(paragraphIndex: number, overrides: RawParagraphOverrid
     lineSpacingRule: 1,
     lineSpacing: null,
     beforePt: 0,
+    before: { value: 0, unit: "pt" } as LengthValue,
     afterPt: 0,
+    after: { value: 0, unit: "pt" } as LengthValue,
     leftIndent: 0,
+    leftIndentValue: { value: 0, unit: "pt" } as LengthValue,
+    leftIndentChars: null,
     rightIndent: 0,
+    rightIndentValue: { value: 0, unit: "pt" } as LengthValue,
+    rightIndentChars: null,
     firstLineIndent: 0,
+    firstLineIndentValue: { value: 0, unit: "pt" } as LengthValue,
     firstLineIndentChars: null,
+    hangingIndentValue: null,
     alignment: 0,
     snapToGrid: 1,
     ...(overrides.paragraph || {}),
@@ -233,11 +242,45 @@ function testFirstLineIndentCharsPreferred(): void {
   assert.match(result.naturalLanguage, /首行缩进 2 字符/);
 }
 
+function testRecognitionKeepsUnits(): void {
+  const raw: RawSelectionStyleSnapshot = {
+    target: "selection",
+    selectionCollapsed: false,
+    selectionStart: 20,
+    selectionEnd: 30,
+    paragraphs: [
+      makeRawParagraph(1, {
+        paragraph: {
+          beforePt: 14.17,
+          before: { value: 0.5, unit: "cm" },
+          afterPt: 17.01,
+          after: { value: 6, unit: "mm" },
+          leftIndent: null,
+          leftIndentValue: { value: 2, unit: "char" },
+          leftIndentChars: 2,
+          rightIndent: 14.4,
+          rightIndentValue: { value: 0.2, unit: "inch" },
+          firstLineIndent: null,
+          firstLineIndentValue: { value: 2, unit: "char" },
+          firstLineIndentChars: 2,
+        },
+      }),
+    ],
+  };
+  const result = buildResult(raw);
+  assert.match(result.naturalLanguage, /段前 0\.5 厘米/);
+  assert.match(result.naturalLanguage, /段后 6 毫米/);
+  assert.match(result.naturalLanguage, /左缩进 2 字符/);
+  assert.match(result.naturalLanguage, /右缩进 0\.2 英寸/);
+  assert.match(result.naturalLanguage, /首行缩进 2 字符/);
+}
+
 testSingleParagraphDescription();
 testMultiParagraphConsistent();
 testMultiParagraphDifferenceSummary();
 testNumberingTabSuffix();
 testFirstLineIndentCharsPreferred();
+testRecognitionKeepsUnits();
 testNoNumberingWhenOnlyDefaultLevelExists();
 
 console.log("style-inspector tests passed");

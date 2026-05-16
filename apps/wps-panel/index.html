@@ -113,6 +113,7 @@
                 <span>对象类型</span>
                 <select id="style-target-type">
                   <option value="image-paragraph">图片所在段落</option>
+                  <option value="image-caption">图片下图名</option>
                   <option value="table-text">表格内文字</option>
                   <option value="other-text">除标题、图片所在段落、表格文字以外所有文字</option>
                 </select>
@@ -122,6 +123,10 @@
                 <input id="style-name" type="text" placeholder="输入或选择样式名称" />
                 <div id="style-name-options" class="style-suggestions" hidden></div>
               </label>
+              <label>
+                <span>引号字体</span>
+                <input id="style-quote-font" type="text" placeholder="如 宋体 / Times New Roman" />
+              </label>
             </div>
             <div class="style-tool__actions">
               <label class="style-tool__checkbox">
@@ -129,6 +134,7 @@
                 <span>显示全部样式</span>
               </label>
               <button id="apply-style-range" type="button">应用样式</button>
+              <button id="apply-quote-font-range" class="button-secondary" type="button">应用引号字体</button>
             </div>
           </section>
         </div>
@@ -348,3 +354,4 @@
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
+

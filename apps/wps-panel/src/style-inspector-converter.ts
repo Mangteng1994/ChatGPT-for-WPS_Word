@@ -14,6 +14,7 @@ import type {
   StyleInspectTarget,
   StyleType,
 } from "./style-inspector-types";
+import { normalizeLengthValue } from "./length-units";
 
 const WD_LINE_SPACE_SINGLE = 0;
 const WD_LINE_SPACE_1PT5 = 1;
@@ -229,6 +230,14 @@ function convertFont(raw: RawParagraphStyleSnapshot): FontStyleInfo {
 }
 
 function convertParagraph(raw: RawParagraphStyleSnapshot): ParagraphStyleInfo {
+  const before = normalizeLengthValue(raw.paragraph.before);
+  const after = normalizeLengthValue(raw.paragraph.after);
+  const leftIndentValue = normalizeLengthValue(raw.paragraph.leftIndentValue);
+  const rightIndentValue = normalizeLengthValue(raw.paragraph.rightIndentValue);
+  const firstLineIndentValue = normalizeLengthValue(raw.paragraph.firstLineIndentValue);
+  const hangingIndentValue = normalizeLengthValue(raw.paragraph.hangingIndentValue);
+  const leftIndentChars = roundNumber(raw.paragraph.leftIndentChars);
+  const rightIndentChars = roundNumber(raw.paragraph.rightIndentChars);
   const firstLineChars = roundNumber(raw.paragraph.firstLineIndentChars);
   const firstLineRaw = roundNumber(raw.paragraph.firstLineIndent);
   const firstLineIndent = firstLineChars === null ? (firstLineRaw === null ? null : firstLineRaw > 0 ? firstLineRaw : 0) : null;
@@ -239,12 +248,20 @@ function convertParagraph(raw: RawParagraphStyleSnapshot): ParagraphStyleInfo {
     lineSpacingRule: lineSpacing.lineSpacingRule,
     lineSpacingPt: lineSpacing.lineSpacingPt,
     beforePt: roundNumber(raw.paragraph.beforePt),
+    before,
     afterPt: roundNumber(raw.paragraph.afterPt),
+    after,
     leftIndent: roundNumber(raw.paragraph.leftIndent),
+    leftIndentValue,
+    leftIndentChars,
     rightIndent: roundNumber(raw.paragraph.rightIndent),
+    rightIndentValue,
+    rightIndentChars,
     firstLineIndent,
+    firstLineIndentValue,
     firstLineIndentChars: firstLineChars,
     hangingIndent,
+    hangingIndentValue,
     alignment: mapParagraphAlignment(roundNumber(raw.paragraph.alignment)),
     snapToGrid: toBooleanOrNull(raw.paragraph.snapToGrid),
   };

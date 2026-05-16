@@ -4,6 +4,7 @@ import {
   type GenericParagraphAlignment,
   type StructuredGenericStyleSpec,
 } from "./style-nl-generic";
+import { convertLengthToPoints, type LengthValue } from "./length-units";
 import { convertRawSelectionStyleSnapshot } from "./style-inspector-converter";
 import { compareParagraphStyles } from "./style-inspector-diff";
 import { buildSelectionStyleDescription } from "./style-inspector-nl";
@@ -44,10 +45,18 @@ async function getDocument(app: any): Promise<any> {
 
 const WD_INFO_ACTIVE_END_PAGE_NUMBER = 3;
 const WD_INFO_WITHIN_TABLE = 12;
+const WD_COLLAPSE_START = 1;
 const WD_STYLE_TYPE_PARAGRAPH = 1;
 const WD_STYLE_TYPE_CHARACTER = 2;
 const WD_OUTLINE_NUMBER_GALLERY = 3;
 const WD_LIST_NUMBER_STYLE_ARABIC = 0;
+const WD_LIST_NUMBER_STYLE_UPPERCASE_ROMAN = 1;
+const WD_LIST_NUMBER_STYLE_LOWERCASE_ROMAN = 2;
+const WD_LIST_NUMBER_STYLE_UPPERCASE_LETTER = 3;
+const WD_LIST_NUMBER_STYLE_LOWERCASE_LETTER = 4;
+const WD_LIST_NUMBER_STYLE_NUMBER_IN_CIRCLE = 18;
+const WD_LIST_NUMBER_STYLE_GB_NUM2 = 27;
+const WD_LIST_NUMBER_STYLE_ARABIC1 = 46;
 const WD_LIST_LEVEL_ALIGN_LEFT = 0;
 const WD_TRAILING_TAB = 0;
 const WD_TRAILING_SPACE = 1;
@@ -63,8 +72,9 @@ const WD_ALIGN_PARAGRAPH_CENTER = 1;
 const WD_ALIGN_PARAGRAPH_RIGHT = 2;
 const WD_ALIGN_PARAGRAPH_JUSTIFY = 3;
 const WD_ALIGN_PARAGRAPH_DISTRIBUTE = 4;
+const QUOTE_CHARACTERS = new Set(['"', "'", "\u201C", "\u201D", "\u2018", "\u2019", "\u300C", "\u300D", "\u300E", "\u300F", "\uFF02"]);
 
-export type StyleTargetType = "image-paragraph" | "table-text" | "other-text";
+export type StyleTargetType = "image-paragraph" | "image-caption" | "table-text" | "other-text";
 
 export interface DocumentStyleOption {
   name: string;
@@ -75,6 +85,12 @@ export interface ApplyStyleByPageRangeOptions {
   pageTo: number;
   styleName: string;
   targetType: StyleTargetType;
+}
+
+export interface ApplyQuoteFontByPageRangeOptions {
+  pageFrom: number;
+  pageTo: number;
+  fontName: string;
 }
 
 export interface ApplyStyleByPageRangeResult {
@@ -149,6 +165,19 @@ async function getRangePageNumber(range: any): Promise<number> {
   return 0;
 }
 
+async function getRangeStartPageNumber(range: any): Promise<number> {
+  if (!range) return 0;
+  const duplicated =
+    (await safeRead(() => range?.Duplicate)) ??
+    (await safeRead(() => range?.duplicate)) ??
+    (await safeRead(() => range?.Duplicate?.())) ??
+    (await safeRead(() => range?.duplicate?.()));
+  if (!duplicated) return getRangePageNumber(range);
+  await safeWrite(() => duplicated?.Collapse?.(WD_COLLAPSE_START));
+  await safeWrite(() => duplicated?.collapse?.(WD_COLLAPSE_START));
+  return getRangePageNumber(duplicated);
+}
+
 async function resolveStyleObject(activeDocument: any, styleName: string): Promise<any> {
   return (
     (await safeRead(() => activeDocument?.Styles?.Item?.(styleName))) ??
@@ -174,6 +203,47 @@ async function applyStyleToRange(range: any, styleObject: any, styleName: string
       return false;
     }
   }
+}
+
+function containsQuoteCharacter(text: string): boolean {
+  for (const char of text) {
+    if (QUOTE_CHARACTERS.has(char)) return true;
+  }
+  return false;
+}
+
+async function applyFontNameToRange(range: any, fontName: string): Promise<boolean> {
+  const font = (await safeRead(() => range?.Font)) ?? (await safeRead(() => range?.font));
+  if (!font) return false;
+  let updated = false;
+  if (await setFirstWritableProperty(font, ["NameFarEast", "NameFarEastBi", "nameFarEast"], fontName)) updated = true;
+  if (await setFirstWritableProperty(font, ["NameAscii", "nameAscii"], fontName)) updated = true;
+  if (await setFirstWritableProperty(font, ["Name", "name"], fontName)) updated = true;
+  if (await setFirstWritableProperty(font, ["NameBi", "nameBi"], fontName)) updated = true;
+  return updated;
+}
+
+async function applyQuoteFontToRange(range: any, fontName: string): Promise<{ matched: number; updated: number }> {
+  const characters = (await safeRead(() => range?.Characters)) ?? (await safeRead(() => range?.characters));
+  const count = Number((await safeRead(() => characters?.Count)) || (await safeRead(() => characters?.count)) || 0);
+  if (!characters || !Number.isFinite(count) || count <= 0) {
+    return { matched: 0, updated: 0 };
+  }
+
+  let matched = 0;
+  let updated = 0;
+  for (let index = 1; index <= count; index += 1) {
+    const characterRange =
+      (await safeRead(() => characters?.Item?.(index))) ??
+      (await safeRead(() => characters?.item?.(index))) ??
+      (await safeRead(() => characters?.[index]));
+    if (!characterRange) continue;
+    const text = String((await safeRead(() => characterRange?.Text)) || "");
+    if (!QUOTE_CHARACTERS.has(text)) continue;
+    matched += 1;
+    if (await applyFontNameToRange(characterRange, fontName)) updated += 1;
+  }
+  return { matched, updated };
 }
 
 export async function listAvailableStyles(app: any): Promise<DocumentStyleOption[]> {
@@ -382,6 +452,19 @@ function fallbackFirstLineIndentPointsFromChars(chars: number, fontSizePt: numbe
   return chars * size;
 }
 
+function fallbackIndentPointsFromChars(chars: number, fontSizePt: number | null): number {
+  const size = Number.isFinite(fontSizePt || NaN) && (fontSizePt || 0) > 0 ? (fontSizePt as number) : 12;
+  return chars * size;
+}
+
+function resolvePoints(primary: LengthValue | null, fallbackPt: number | null): number | null {
+  if (primary && primary.unit !== "char") {
+    const converted = convertLengthToPoints(primary);
+    if (Number.isFinite(converted || NaN)) return converted as number;
+  }
+  return Number.isFinite(fallbackPt || NaN) ? (fallbackPt as number) : null;
+}
+
 async function applyGenericLineSpacing(app: any, paragraphFormat: any, styleSpec: StructuredGenericStyleSpec): Promise<void> {
   const rule = styleSpec.paragraph.lineSpacingRule;
   if (rule === "single") {
@@ -465,22 +548,84 @@ async function applyNamedStyleProperties(app: any, styleObject: any, styleSpec: 
   if (!paragraphFormat) return;
 
   await applyGenericLineSpacing(app, paragraphFormat, styleSpec);
-  await setPropertyWhenDefined(paragraphFormat, ["SpaceBefore", "spaceBefore"], styleSpec.paragraph.beforePt);
-  await setPropertyWhenDefined(paragraphFormat, ["SpaceAfter", "spaceAfter"], styleSpec.paragraph.afterPt);
-  await setPropertyWhenDefined(paragraphFormat, ["LeftIndent", "leftIndent"], styleSpec.paragraph.leftIndent);
-  await setPropertyWhenDefined(paragraphFormat, ["RightIndent", "rightIndent"], styleSpec.paragraph.rightIndent);
-  if (styleSpec.paragraph.firstLineIndentChars !== null) {
+  await setPropertyWhenDefined(
+    paragraphFormat,
+    ["SpaceBefore", "spaceBefore"],
+    resolvePoints(styleSpec.paragraph.before, styleSpec.paragraph.beforePt)
+  );
+  await setPropertyWhenDefined(
+    paragraphFormat,
+    ["SpaceAfter", "spaceAfter"],
+    resolvePoints(styleSpec.paragraph.after, styleSpec.paragraph.afterPt)
+  );
+
+  const leftLength =
+    styleSpec.paragraph.leftIndentValue ||
+    (styleSpec.paragraph.leftIndentChars !== null
+      ? ({ value: styleSpec.paragraph.leftIndentChars, unit: "char" } as LengthValue)
+      : null);
+  if (leftLength?.unit === "char") {
+    const writtenLeftChars = await setFirstWritableProperty(
+      paragraphFormat,
+      ["CharacterUnitLeftIndent", "characterUnitLeftIndent"],
+      leftLength.value
+    );
+    if (!writtenLeftChars) {
+      const fallbackPt = fallbackIndentPointsFromChars(leftLength.value, styleSpec.font.sizePt);
+      await setPropertyWhenDefined(paragraphFormat, ["LeftIndent", "leftIndent"], fallbackPt);
+    }
+  } else {
+    await setPropertyWhenDefined(
+      paragraphFormat,
+      ["LeftIndent", "leftIndent"],
+      resolvePoints(leftLength, styleSpec.paragraph.leftIndent)
+    );
+  }
+
+  const rightLength =
+    styleSpec.paragraph.rightIndentValue ||
+    (styleSpec.paragraph.rightIndentChars !== null
+      ? ({ value: styleSpec.paragraph.rightIndentChars, unit: "char" } as LengthValue)
+      : null);
+  if (rightLength?.unit === "char") {
+    const writtenRightChars = await setFirstWritableProperty(
+      paragraphFormat,
+      ["CharacterUnitRightIndent", "characterUnitRightIndent"],
+      rightLength.value
+    );
+    if (!writtenRightChars) {
+      const fallbackPt = fallbackIndentPointsFromChars(rightLength.value, styleSpec.font.sizePt);
+      await setPropertyWhenDefined(paragraphFormat, ["RightIndent", "rightIndent"], fallbackPt);
+    }
+  } else {
+    await setPropertyWhenDefined(
+      paragraphFormat,
+      ["RightIndent", "rightIndent"],
+      resolvePoints(rightLength, styleSpec.paragraph.rightIndent)
+    );
+  }
+
+  const firstLineLength =
+    styleSpec.paragraph.firstLineIndentValue ||
+    (styleSpec.paragraph.firstLineIndentChars !== null
+      ? ({ value: styleSpec.paragraph.firstLineIndentChars, unit: "char" } as LengthValue)
+      : null);
+  if (firstLineLength?.unit === "char" || styleSpec.paragraph.firstLineIndentChars !== null) {
+    const chars = firstLineLength?.unit === "char" ? firstLineLength.value : (styleSpec.paragraph.firstLineIndentChars as number);
     const writtenCharIndent = await setFirstWritableProperty(
       paragraphFormat,
       ["CharacterUnitFirstLineIndent", "characterUnitFirstLineIndent"],
-      styleSpec.paragraph.firstLineIndentChars
+      chars
     );
     if (!writtenCharIndent) {
-      const fallbackPt = fallbackFirstLineIndentPointsFromChars(styleSpec.paragraph.firstLineIndentChars, styleSpec.font.sizePt);
+      const fallbackPt = fallbackFirstLineIndentPointsFromChars(chars, styleSpec.font.sizePt);
       await setFirstWritableProperty(paragraphFormat, ["FirstLineIndent", "firstLineIndent"], fallbackPt);
     }
   } else {
-    await setPropertyWhenDefined(paragraphFormat, ["FirstLineIndent", "firstLineIndent"], styleSpec.paragraph.firstLineIndent);
+    const hangingPt = resolvePoints(styleSpec.paragraph.hangingIndentValue, null);
+    const firstPt = resolvePoints(firstLineLength, styleSpec.paragraph.firstLineIndent);
+    const resolvedFirstIndent = hangingPt !== null ? -Math.abs(hangingPt) : firstPt;
+    await setPropertyWhenDefined(paragraphFormat, ["FirstLineIndent", "firstLineIndent"], resolvedFirstIndent);
   }
   const alignment = mapGenericAlignment(styleSpec.paragraph.alignment);
   if (alignment !== null) {
@@ -519,7 +664,7 @@ function buildHeadingLikeStyleSpecForNumbering(styleSpec: StructuredGenericStyle
       snapToGrid: styleSpec.paragraph.snapToGrid === true,
     },
     numbering: {
-      format: "decimal",
+      format: styleSpec.numbering.format || "decimal",
       levelText:
         styleSpec.numbering.levelText ||
         Array.from({ length: level }, (_, idx) => `%${idx + 1}`).join("."),
@@ -724,7 +869,7 @@ async function configureHeadingListLevel(listTemplate: any, styleSpec: Structure
     ? styleSpec.numbering.textIndent
     : styleSpec.numbering.leftIndent + styleSpec.numbering.hanging;
 
-  await setFirstWritableProperty(listLevel, ["NumberStyle", "numberStyle"], WD_LIST_NUMBER_STYLE_ARABIC);
+  await setFirstWritableProperty(listLevel, ["NumberStyle", "numberStyle"], mapListNumberStyle(styleSpec.numbering.format));
   await setFirstWritableProperty(listLevel, ["NumberFormat", "numberFormat"], styleSpec.numbering.levelText);
   await setFirstWritableProperty(listLevel, ["Alignment", "alignment"], WD_LIST_LEVEL_ALIGN_LEFT);
   await setFirstWritableProperty(listLevel, ["NumberPosition", "numberPosition"], styleSpec.numbering.leftIndent);
@@ -735,6 +880,17 @@ async function configureHeadingListLevel(listTemplate: any, styleSpec: Structure
   await setFirstWritableProperty(listLevel, ["TrailingCharacter", "trailingCharacter"], mapTrailingCharacter(styleSpec.numbering.suffix));
   await setFirstWritableProperty(listLevel, ["LinkedStyle", "linkedStyle"], styleName);
   return true;
+}
+
+function mapListNumberStyle(value: StructuredHeadingStyle["numbering"]["format"]): number {
+  if (value === "numberInCircle") return WD_LIST_NUMBER_STYLE_NUMBER_IN_CIRCLE;
+  if (value === "parenthesizedNumber") return WD_LIST_NUMBER_STYLE_GB_NUM2;
+  if (value === "parenthesizedArabic") return WD_LIST_NUMBER_STYLE_ARABIC1;
+  if (value === "lowerLetter") return WD_LIST_NUMBER_STYLE_LOWERCASE_LETTER;
+  if (value === "upperLetter") return WD_LIST_NUMBER_STYLE_UPPERCASE_LETTER;
+  if (value === "lowerRoman") return WD_LIST_NUMBER_STYLE_LOWERCASE_ROMAN;
+  if (value === "upperRoman") return WD_LIST_NUMBER_STYLE_UPPERCASE_ROMAN;
+  return WD_LIST_NUMBER_STYLE_ARABIC;
 }
 
 async function bindStyleToListTemplate(styleObject: any, listTemplate: any, level: number): Promise<boolean> {
@@ -793,10 +949,53 @@ export async function applyStyleByPageRange(
   if (options.targetType === "image-paragraph") {
     return applyStyleToImageParagraphs(activeDocument, styleObject, options.styleName, options.pageFrom, options.pageTo);
   }
+  if (options.targetType === "image-caption") {
+    return applyStyleToImageCaptions(activeDocument, styleObject, options.styleName, options.pageFrom, options.pageTo);
+  }
   if (options.targetType === "table-text") {
     return applyStyleToTableText(activeDocument, styleObject, options.styleName, options.pageFrom, options.pageTo);
   }
   return applyStyleToOtherText(activeDocument, styleObject, options.styleName, options.pageFrom, options.pageTo);
+}
+
+export async function applyQuoteFontByPageRange(
+  app: any,
+  options: ApplyQuoteFontByPageRangeOptions
+): Promise<ApplyStyleByPageRangeResult> {
+  const activeDocument = await getDocument(app);
+  const fontName = normalizeText(options.fontName);
+  if (!fontName) {
+    throw new Error("引号字体名称不能为空。");
+  }
+
+  const paragraphsRoot = await safeRead(() => activeDocument?.Paragraphs);
+  const count = Number((await safeRead(() => paragraphsRoot?.Count)) || 0);
+  if (!paragraphsRoot || !Number.isFinite(count) || count <= 0) {
+    return { matched: 0, updated: 0, skipped: 0 };
+  }
+
+  let matched = 0;
+  let updated = 0;
+  for (let index = 1; index <= count; index += 1) {
+    const paragraph =
+      (await safeRead(() => paragraphsRoot?.Item?.(index))) ??
+      (await safeRead(() => paragraphsRoot?.item?.(index))) ??
+      (await safeRead(() => paragraphsRoot?.[index]));
+    if (!paragraph) continue;
+
+    const paragraphRange = await safeRead(() => paragraph?.Range);
+    if (!paragraphRange) continue;
+    const page = await getRangePageNumber(paragraphRange);
+    if (page < options.pageFrom || page > options.pageTo) continue;
+
+    const text = await getRangeText(paragraphRange);
+    if (!text || !containsQuoteCharacter(text)) continue;
+
+    const result = await applyQuoteFontToRange(paragraphRange, fontName);
+    matched += result.matched;
+    updated += result.updated;
+  }
+  return { matched, updated, skipped: matched - updated };
 }
 
 async function applyStyleToImageParagraphs(
@@ -853,19 +1052,87 @@ async function applyStyleToTableText(
 ): Promise<ApplyStyleByPageRangeResult> {
   let matched = 0;
   let updated = 0;
+  let sawInRangeTable = false;
   const tables = await collectIndexedItems(activeDocument?.Tables);
 
   for (const table of tables) {
-    const cells = await collectIndexedItems((await safeRead(() => table?.Range?.Cells)) ?? (await safeRead(() => table?.range?.cells)));
+    const tableRange = (await safeRead(() => table?.Range)) ?? (await safeRead(() => table?.range));
+    if (!tableRange) continue;
+
+    const tableStartPage = await getRangeStartPageNumber(tableRange);
+    const tableEndPage = await getRangePageNumber(tableRange);
+    const hasTablePageInfo = tableStartPage > 0 && tableEndPage > 0;
+    if (hasTablePageInfo && tableEndPage < pageFrom) continue;
+    if (hasTablePageInfo && tableStartPage > pageTo) {
+      if (sawInRangeTable) break;
+      continue;
+    }
+    if (hasTablePageInfo) sawInRangeTable = true;
+
+    const tableFullyInRange = hasTablePageInfo && tableStartPage >= pageFrom && tableEndPage <= pageTo;
+    const cells = await collectIndexedItems((await safeRead(() => tableRange?.Cells)) ?? (await safeRead(() => tableRange?.cells)));
     for (const cell of cells) {
       const cellRange = (await safeRead(() => cell?.Range)) ?? (await safeRead(() => cell?.range));
-      const page = await getRangePageNumber(cellRange);
-      if (page < pageFrom || page > pageTo) continue;
+      if (!tableFullyInRange) {
+        const page = await getRangePageNumber(cellRange);
+        if (page < pageFrom || page > pageTo) continue;
+      }
       const text = normalizeText(await safeRead(() => cellRange?.Text));
       if (!text) continue;
       matched += 1;
       if (await applyStyleToRange(cellRange, styleObject, styleName)) updated += 1;
     }
+  }
+
+  return { matched, updated, skipped: matched - updated };
+}
+
+async function applyStyleToImageCaptions(
+  activeDocument: any,
+  styleObject: any,
+  styleName: string,
+  pageFrom: number,
+  pageTo: number
+): Promise<ApplyStyleByPageRangeResult> {
+  const imageParagraphStarts = await collectImageParagraphStarts(activeDocument, pageFrom, pageTo);
+  if (!imageParagraphStarts.size) {
+    return { matched: 0, updated: 0, skipped: 0 };
+  }
+
+  const paragraphsRoot = await safeRead(() => activeDocument?.Paragraphs);
+  const count = Number((await safeRead(() => paragraphsRoot?.Count)) || 0);
+  if (!paragraphsRoot || !Number.isFinite(count) || count <= 0) {
+    return { matched: 0, updated: 0, skipped: 0 };
+  }
+
+  const appliedCaptionStarts = new Set<number>();
+  let matched = 0;
+  let updated = 0;
+
+  for (let index = 1; index < count; index += 1) {
+    const paragraph =
+      (await safeRead(() => paragraphsRoot?.Item?.(index))) ??
+      (await safeRead(() => paragraphsRoot?.item?.(index))) ??
+      (await safeRead(() => paragraphsRoot?.[index]));
+    if (!paragraph) continue;
+
+    const paragraphRange = await safeRead(() => paragraph?.Range);
+    const start = Number((await safeRead(() => paragraphRange?.Start)) || 0);
+    if (!start || !imageParagraphStarts.has(start)) continue;
+
+    const nextParagraph =
+      (await safeRead(() => paragraphsRoot?.Item?.(index + 1))) ??
+      (await safeRead(() => paragraphsRoot?.item?.(index + 1))) ??
+      (await safeRead(() => paragraphsRoot?.[index + 1]));
+    if (!nextParagraph) continue;
+
+    const nextRange = await safeRead(() => nextParagraph?.Range);
+    const nextStart = Number((await safeRead(() => nextRange?.Start)) || 0);
+    if (!nextRange || !nextStart || appliedCaptionStarts.has(nextStart)) continue;
+
+    appliedCaptionStarts.add(nextStart);
+    matched += 1;
+    if (await applyStyleToRange(nextRange, styleObject, styleName)) updated += 1;
   }
 
   return { matched, updated, skipped: matched - updated };
@@ -880,7 +1147,9 @@ async function applyStyleToOtherText(
 ): Promise<ApplyStyleByPageRangeResult> {
   let matched = 0;
   let updated = 0;
+  let enteredRange = false;
   const excludedImageParagraphStarts = await collectImageParagraphStarts(activeDocument, pageFrom, pageTo);
+  const excludedTableParagraphStarts = await collectTableParagraphStarts(activeDocument, pageFrom, pageTo);
   const paragraphsRoot = await safeRead(() => activeDocument?.Paragraphs);
   const count = Number((await safeRead(() => paragraphsRoot?.Count)) || 0);
   if (!paragraphsRoot || !Number.isFinite(count) || count <= 0) {
@@ -898,22 +1167,65 @@ async function applyStyleToOtherText(
     if (!paragraphRange) continue;
 
     const page = await getRangePageNumber(paragraphRange);
-    if (page < pageFrom || page > pageTo) continue;
+    if (page < pageFrom) continue;
+    if (page > pageTo) {
+      if (enteredRange) break;
+      continue;
+    }
+    enteredRange = true;
 
     const start = Number((await safeRead(() => paragraphRange?.Start)) || 0);
-    if (!start || excludedImageParagraphStarts.has(start)) continue;
+    if (!start || excludedImageParagraphStarts.has(start) || excludedTableParagraphStarts.has(start)) continue;
+
+    const outlineLevel = Number((await safeRead(() => paragraph?.OutlineLevel)) || 10);
+    if (Number.isFinite(outlineLevel) && outlineLevel >= 1 && outlineLevel <= 9) continue;
 
     const text = await getRangeText(paragraphRange);
     if (!text) continue;
-
-    if (await isRangeInTable(paragraphRange)) continue;
-    if (await isHeadingParagraph(paragraph, paragraphRange)) continue;
 
     matched += 1;
     if (await applyStyleToRange(paragraphRange, styleObject, styleName)) updated += 1;
   }
 
   return { matched, updated, skipped: matched - updated };
+}
+
+async function collectTableParagraphStarts(activeDocument: any, pageFrom: number, pageTo: number): Promise<Set<number>> {
+  const starts = new Set<number>();
+  const tables = await collectIndexedItems(activeDocument?.Tables);
+  let sawInRangeTable = false;
+
+  for (const table of tables) {
+    const tableRange = (await safeRead(() => table?.Range)) ?? (await safeRead(() => table?.range));
+    if (!tableRange) continue;
+
+    const tableStartPage = await getRangeStartPageNumber(tableRange);
+    const tableEndPage = await getRangePageNumber(tableRange);
+    const hasTablePageInfo = tableStartPage > 0 && tableEndPage > 0;
+    if (hasTablePageInfo && tableEndPage < pageFrom) continue;
+    if (hasTablePageInfo && tableStartPage > pageTo) {
+      if (sawInRangeTable) break;
+      continue;
+    }
+    if (hasTablePageInfo) sawInRangeTable = true;
+
+    const tableFullyInRange = hasTablePageInfo && tableStartPage >= pageFrom && tableEndPage <= pageTo;
+    const tableParagraphs = await getParagraphCollection(tableRange);
+    if (!tableParagraphs?.length) continue;
+
+    for (const paragraph of tableParagraphs) {
+      const paragraphRange = await safeRead(() => paragraph?.Range);
+      if (!paragraphRange) continue;
+      if (!tableFullyInRange) {
+        const page = await getRangePageNumber(paragraphRange);
+        if (page < pageFrom || page > pageTo) continue;
+      }
+      const start = Number((await safeRead(() => paragraphRange?.Start)) || 0);
+      if (start) starts.add(start);
+    }
+  }
+
+  return starts;
 }
 
 async function collectImageParagraphStarts(activeDocument: any, pageFrom: number, pageTo: number): Promise<Set<number>> {

@@ -1,6 +1,7 @@
 import {
   parseNaturalLanguageStyleInput,
   type HeadingLevel,
+  type NumberingFormat,
   type NumberingSuffix,
   type ParsedHeadingStyleBlock,
 } from "./style-nl-parser";
@@ -31,7 +32,7 @@ export interface StructuredHeadingStyle {
     snapToGrid: boolean;
   };
   numbering: {
-    format: "decimal";
+    format: NumberingFormat;
     levelText: string;
     align: "left";
     leftIndent: number;

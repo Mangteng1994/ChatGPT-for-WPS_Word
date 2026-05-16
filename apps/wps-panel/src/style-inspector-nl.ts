@@ -9,6 +9,7 @@ import type {
   StyleComparisonResult,
   StyleType,
 } from "./style-inspector-types";
+import { formatLengthValue, type LengthValue } from "./length-units";
 
 function formatNumber(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "未读取到明确设置";
@@ -18,8 +19,13 @@ function formatNumber(value: number | null): string {
 
 function formatPointValue(value: number | null): string {
   if (value === null || !Number.isFinite(value)) return "未读取到明确设置";
-  if (Math.abs(value % 1) < 0.0001) return `${value.toFixed(0)} 磅`;
-  return `${value} 磅`;
+  return formatLengthValue({ value, unit: "pt" });
+}
+
+function preferLengthValue(primary: LengthValue | null, fallbackPointValue: number | null): LengthValue | null {
+  if (primary && Number.isFinite(primary.value)) return primary;
+  if (fallbackPointValue === null || !Number.isFinite(fallbackPointValue)) return null;
+  return { value: fallbackPointValue, unit: "pt" };
 }
 
 function styleTypeLabel(value: StyleType): string {
@@ -124,20 +130,32 @@ function lineSpacingDescription(paragraph: ParagraphStyleInfo): string {
 }
 
 function paragraphSpacingDescription(paragraph: ParagraphStyleInfo): string {
-  if (paragraph.beforePt === 0 && paragraph.afterPt === 0) {
+  const before = preferLengthValue(paragraph.before, paragraph.beforePt);
+  const after = preferLengthValue(paragraph.after, paragraph.afterPt);
+  if (before?.value === 0 && after?.value === 0 && before.unit === after.unit) {
     return "段前段后均为 0";
   }
   const parts: string[] = [];
-  if (paragraph.beforePt !== null) parts.push(`段前 ${formatNumber(paragraph.beforePt)}`);
-  if (paragraph.afterPt !== null) parts.push(`段后 ${formatNumber(paragraph.afterPt)}`);
+  if (before) parts.push(`段前 ${formatLengthValue(before)}`);
+  if (after) parts.push(`段后 ${formatLengthValue(after)}`);
   return parts.join("，") || "段前段后未读取到明确设置";
 }
 
 function paragraphIndentDescription(paragraph: ParagraphStyleInfo): string {
+  const left = paragraph.leftIndentChars !== null
+    ? ({ value: paragraph.leftIndentChars, unit: "char" } as const)
+    : preferLengthValue(paragraph.leftIndentValue, paragraph.leftIndent);
+  const right = paragraph.rightIndentChars !== null
+    ? ({ value: paragraph.rightIndentChars, unit: "char" } as const)
+    : preferLengthValue(paragraph.rightIndentValue, paragraph.rightIndent);
+  const firstLine = paragraph.firstLineIndentChars !== null
+    ? ({ value: paragraph.firstLineIndentChars, unit: "char" } as const)
+    : preferLengthValue(paragraph.firstLineIndentValue, paragraph.firstLineIndent);
+  const hanging = preferLengthValue(paragraph.hangingIndentValue, paragraph.hangingIndent);
   const firstLineZero = paragraph.firstLineIndentChars !== null ? paragraph.firstLineIndentChars === 0 : paragraph.firstLineIndent === 0;
   const allZero =
-    paragraph.leftIndent === 0 &&
-    paragraph.rightIndent === 0 &&
+    left?.value === 0 &&
+    right?.value === 0 &&
     firstLineZero &&
     (paragraph.hangingIndent === 0 || paragraph.hangingIndent === null);
   if (allZero) {
@@ -145,12 +163,11 @@ function paragraphIndentDescription(paragraph: ParagraphStyleInfo): string {
   }
 
   const parts: string[] = [];
-  if (paragraph.leftIndent !== null) parts.push(`左缩进 ${formatNumber(paragraph.leftIndent)}`);
-  if (paragraph.rightIndent !== null) parts.push(`右缩进 ${formatNumber(paragraph.rightIndent)}`);
-  if (paragraph.firstLineIndentChars !== null) parts.push(`首行缩进 ${formatNumber(paragraph.firstLineIndentChars)} 字符`);
-  else if (paragraph.firstLineIndent !== null) parts.push(`首行缩进 ${formatNumber(paragraph.firstLineIndent)}`);
-  if (paragraph.hangingIndent !== null && paragraph.hangingIndent > 0) {
-    parts.push(`悬挂缩进 ${formatNumber(paragraph.hangingIndent)}`);
+  if (left) parts.push(`左缩进 ${formatLengthValue(left)}`);
+  if (right) parts.push(`右缩进 ${formatLengthValue(right)}`);
+  if (firstLine) parts.push(`首行缩进 ${formatLengthValue(firstLine)}`);
+  if (hanging !== null && hanging.value > 0) {
+    parts.push(`悬挂缩进 ${formatLengthValue(hanging)}`);
   }
   return parts.join("，") || "缩进未读取到明确设置";
 }

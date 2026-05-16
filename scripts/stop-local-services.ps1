@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$ports = @(32123, 5173, 5174)
+$ports = @(3889, 32123, 5173, 5174)
 $connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
   Where-Object { $ports -contains $_.LocalPort }
 

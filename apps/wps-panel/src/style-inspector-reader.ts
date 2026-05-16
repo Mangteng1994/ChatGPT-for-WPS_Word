@@ -6,6 +6,7 @@ import type {
   RawSelectionStyleSnapshot,
   RawStyleInfo,
 } from "./style-inspector-types";
+import { convertLengthToPoints, parseLengthValue, type LengthValue } from "./length-units";
 
 function normalizeText(value: unknown): string {
   return String(value || "")
@@ -168,30 +169,78 @@ async function readParagraphInfo(paragraphRange: any): Promise<RawParagraphInfo>
       lineSpacingRule: null,
       lineSpacing: null,
       beforePt: null,
+      before: null,
       afterPt: null,
+      after: null,
       leftIndent: null,
+      leftIndentValue: null,
+      leftIndentChars: null,
       rightIndent: null,
+      rightIndentValue: null,
+      rightIndentChars: null,
       firstLineIndent: null,
+      firstLineIndentValue: null,
       firstLineIndentChars: null,
+      hangingIndentValue: null,
       alignment: null,
       snapToGrid: null,
     };
   }
 
+  const beforeRaw = (await safeRead(() => paragraphFormat?.SpaceBefore)) ?? (await safeRead(() => paragraphFormat?.spaceBefore));
+  const afterRaw = (await safeRead(() => paragraphFormat?.SpaceAfter)) ?? (await safeRead(() => paragraphFormat?.spaceAfter));
+  const leftRaw = (await safeRead(() => paragraphFormat?.LeftIndent)) ?? (await safeRead(() => paragraphFormat?.leftIndent));
+  const rightRaw = (await safeRead(() => paragraphFormat?.RightIndent)) ?? (await safeRead(() => paragraphFormat?.rightIndent));
+  const firstLineRaw = (await safeRead(() => paragraphFormat?.FirstLineIndent)) ?? (await safeRead(() => paragraphFormat?.firstLineIndent));
+
+  const firstLineCharsRaw =
+    (await safeRead(() => paragraphFormat?.CharacterUnitFirstLineIndent)) ??
+    (await safeRead(() => paragraphFormat?.characterUnitFirstLineIndent));
+  const leftCharsRaw =
+    (await safeRead(() => paragraphFormat?.CharacterUnitLeftIndent)) ??
+    (await safeRead(() => paragraphFormat?.characterUnitLeftIndent));
+  const rightCharsRaw =
+    (await safeRead(() => paragraphFormat?.CharacterUnitRightIndent)) ??
+    (await safeRead(() => paragraphFormat?.characterUnitRightIndent));
+
+  const before = parseLengthValue(beforeRaw, "pt");
+  const after = parseLengthValue(afterRaw, "pt");
+  const leftByChars = parseLengthValue(leftCharsRaw, "char");
+  const rightByChars = parseLengthValue(rightCharsRaw, "char");
+  const firstByChars = parseLengthValue(firstLineCharsRaw, "char");
+  const leftByLength = leftByChars || parseLengthValue(leftRaw, "pt");
+  const rightByLength = rightByChars || parseLengthValue(rightRaw, "pt");
+  const firstByLength = firstByChars || parseLengthValue(firstLineRaw, "pt");
+
+  const firstLinePt = convertLengthToPoints(firstByLength);
+  const hangingIndentValue: LengthValue | null =
+    firstByLength && firstByLength.unit !== "char" && firstByLength.value < 0
+      ? { value: Math.abs(firstByLength.value), unit: firstByLength.unit }
+      : null;
+  const firstLineIndentValue: LengthValue | null =
+    firstByLength && firstByLength.unit !== "char" && firstByLength.value >= 0
+      ? firstByLength
+      : firstByLength?.unit === "char"
+      ? firstByLength
+      : null;
+
   return {
     lineSpacingRule: toFiniteNumber((await safeRead(() => paragraphFormat?.LineSpacingRule)) ?? (await safeRead(() => paragraphFormat?.lineSpacingRule))),
     lineSpacing: toFiniteNumber((await safeRead(() => paragraphFormat?.LineSpacing)) ?? (await safeRead(() => paragraphFormat?.lineSpacing))),
-    beforePt: toFiniteNumber((await safeRead(() => paragraphFormat?.SpaceBefore)) ?? (await safeRead(() => paragraphFormat?.spaceBefore))),
-    afterPt: toFiniteNumber((await safeRead(() => paragraphFormat?.SpaceAfter)) ?? (await safeRead(() => paragraphFormat?.spaceAfter))),
-    leftIndent: toFiniteNumber((await safeRead(() => paragraphFormat?.LeftIndent)) ?? (await safeRead(() => paragraphFormat?.leftIndent))),
-    rightIndent: toFiniteNumber((await safeRead(() => paragraphFormat?.RightIndent)) ?? (await safeRead(() => paragraphFormat?.rightIndent))),
-    firstLineIndent: toFiniteNumber(
-      (await safeRead(() => paragraphFormat?.FirstLineIndent)) ?? (await safeRead(() => paragraphFormat?.firstLineIndent))
-    ),
-    firstLineIndentChars: toFiniteNumber(
-      (await safeRead(() => paragraphFormat?.CharacterUnitFirstLineIndent)) ??
-        (await safeRead(() => paragraphFormat?.characterUnitFirstLineIndent))
-    ),
+    beforePt: convertLengthToPoints(before),
+    before,
+    afterPt: convertLengthToPoints(after),
+    after,
+    leftIndent: convertLengthToPoints(leftByLength),
+    leftIndentValue: leftByLength,
+    leftIndentChars: leftByLength?.unit === "char" ? leftByLength.value : null,
+    rightIndent: convertLengthToPoints(rightByLength),
+    rightIndentValue: rightByLength,
+    rightIndentChars: rightByLength?.unit === "char" ? rightByLength.value : null,
+    firstLineIndent: firstLinePt,
+    firstLineIndentValue,
+    firstLineIndentChars: firstByLength?.unit === "char" ? firstByLength.value : null,
+    hangingIndentValue,
     alignment: toFiniteNumber((await safeRead(() => paragraphFormat?.Alignment)) ?? (await safeRead(() => paragraphFormat?.alignment))),
     snapToGrid: (await safeRead(() => paragraphFormat?.SnapToGrid)) ?? (await safeRead(() => paragraphFormat?.snapToGrid)),
   };
