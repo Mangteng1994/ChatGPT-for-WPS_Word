@@ -72,6 +72,8 @@ const WD_ALIGN_PARAGRAPH_CENTER = 1;
 const WD_ALIGN_PARAGRAPH_RIGHT = 2;
 const WD_ALIGN_PARAGRAPH_JUSTIFY = 3;
 const WD_ALIGN_PARAGRAPH_DISTRIBUTE = 4;
+const WD_FORMAT_DOCUMENT_DEFAULT = 16;
+const WD_DO_NOT_SAVE_CHANGES = 0;
 const QUOTE_CHARACTERS = new Set(['"', "'", "\u201C", "\u201D", "\u2018", "\u2019", "\u300C", "\u300D", "\u300E", "\u300F", "\uFF02"]);
 
 export type StyleTargetType = "image-paragraph" | "image-caption" | "table-text" | "other-text";
@@ -99,8 +101,96 @@ export interface ApplyStyleByPageRangeResult {
   skipped: number;
 }
 
+export interface SplitDocumentByHeadingOptions {
+  pageFrom: number;
+  pageTo: number;
+  headingLevel: number;
+  outputDirectory: string;
+  onProgress?: (progress: SplitDocumentProgress) => void | Promise<void>;
+}
+
+export interface SplitDocumentByHeadingResult {
+  totalSections: number;
+  exported: number;
+  skipped: number;
+  files: string[];
+}
+
+export interface SplitDocumentProgress {
+  phase: "scan" | "export" | "done";
+  scanned: number;
+  scanTotal: number;
+  current: number;
+  total: number;
+  exported: number;
+  skipped: number;
+  currentTitle: string;
+}
+
 function normalizeText(value: unknown): string {
   return String(value || "").replace(/\r/g, "").trim();
+}
+
+const CHINESE_HEADING_LEVEL_MAP: Record<string, number> = {
+  一: 1,
+  二: 2,
+  三: 3,
+  四: 4,
+  五: 5,
+  六: 6,
+  七: 7,
+  八: 8,
+  九: 9,
+};
+
+function parseHeadingLevelFromStyleName(styleName: string): number {
+  const normalized = normalizeText(styleName).toLowerCase();
+  if (!normalized) return 0;
+
+  const englishMatch = normalized.match(/^heading\s*(\d{1,2})$/);
+  if (englishMatch) {
+    const level = Number(englishMatch[1]);
+    return Number.isFinite(level) && level >= 1 && level <= 9 ? level : 0;
+  }
+
+  const chineseDigitMatch = normalized.match(/^标题\s*(\d{1,2})$/);
+  if (chineseDigitMatch) {
+    const level = Number(chineseDigitMatch[1]);
+    return Number.isFinite(level) && level >= 1 && level <= 9 ? level : 0;
+  }
+
+  const chineseWordMatch = normalized.match(/^([一二三四五六七八九])级标题$/);
+  if (chineseWordMatch) {
+    return CHINESE_HEADING_LEVEL_MAP[chineseWordMatch[1]] || 0;
+  }
+
+  return 0;
+}
+
+function normalizeOutputDirectory(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (/^[a-zA-Z]:[\\/]?$/.test(trimmed)) {
+    return `${trimmed.slice(0, 2)}\\`;
+  }
+  if (trimmed === "/" || trimmed === "\\") {
+    return trimmed;
+  }
+  return trimmed.replace(/[\\/]+$/, "");
+}
+
+function buildPathUnderDirectory(directory: string, fileName: string): string {
+  const normalizedDirectory = normalizeOutputDirectory(directory);
+  if (!normalizedDirectory) return fileName;
+  if (/[\\/]$/.test(normalizedDirectory)) return `${normalizedDirectory}${fileName}`;
+  const separator = /\\/.test(normalizedDirectory) ? "\\" : "/";
+  return `${normalizedDirectory}${separator}${fileName}`;
+}
+
+function sanitizeFileNamePart(value: string): string {
+  const normalized = normalizeText(value).replace(/\s+/g, " ");
+  const noReserved = normalized.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_").replace(/[. ]+$/g, "");
+  return noReserved || "未命名章节";
 }
 
 async function safeRead<T>(factory: () => Promise<T> | T): Promise<T | null> {
@@ -1278,9 +1368,7 @@ async function isRangeInTable(range: any): Promise<boolean> {
 }
 
 function isHeadingStyleName(styleName: string): boolean {
-  const normalized = normalizeText(styleName).toLowerCase();
-  if (!normalized) return false;
-  return /^heading\s*\d*$/.test(normalized) || /^标题\s*\d*$/.test(normalized);
+  return parseHeadingLevelFromStyleName(styleName) > 0;
 }
 
 async function resolveStyleName(styleRef: any): Promise<string> {
@@ -1294,13 +1382,17 @@ async function resolveStyleName(styleRef: any): Promise<string> {
   );
 }
 
-async function isHeadingParagraph(paragraph: any, paragraphRange: any): Promise<boolean> {
+async function resolveParagraphHeadingLevel(paragraph: any, paragraphRange: any): Promise<number> {
   const outlineLevel = Number((await safeRead(() => paragraph?.OutlineLevel)) || 10);
-  if (Number.isFinite(outlineLevel) && outlineLevel >= 1 && outlineLevel <= 9) return true;
+  if (Number.isFinite(outlineLevel) && outlineLevel >= 1 && outlineLevel <= 9) return outlineLevel;
 
   const styleRef = (await safeRead(() => paragraph?.Style)) ?? (await safeRead(() => paragraphRange?.Style));
   const styleName = await resolveStyleName(styleRef);
-  return isHeadingStyleName(styleName);
+  return parseHeadingLevelFromStyleName(styleName);
+}
+
+async function isHeadingParagraph(paragraph: any, paragraphRange: any): Promise<boolean> {
+  return (await resolveParagraphHeadingLevel(paragraph, paragraphRange)) > 0;
 }
 
 async function firstParagraphFromRange(range: any): Promise<any | null> {
@@ -1328,6 +1420,378 @@ async function collectIndexedItems(collection: any): Promise<any[]> {
     if (item) items.push(item);
   }
   return items;
+}
+
+interface SplitHeadingMarker {
+  start: number;
+  headingLevel: number;
+  title: string;
+}
+
+function normalizeHeadingFileName(headingText: string, headingIndex: number): string {
+  const sanitized = sanitizeFileNamePart(headingText);
+  const shortened = sanitized.length > 80 ? sanitized.slice(0, 80).trim() : sanitized;
+  return `${String(headingIndex).padStart(3, "0")}_${shortened || `章节_${headingIndex}`}.docx`;
+}
+
+async function closeDocumentSilently(document: any): Promise<void> {
+  await safeWrite(() => document?.Close?.(WD_DO_NOT_SAVE_CHANGES));
+  await safeWrite(() => document?.close?.(WD_DO_NOT_SAVE_CHANGES));
+}
+
+async function saveDocumentAsDocx(document: any, filePath: string): Promise<boolean> {
+  if (await safeWrite(() => document?.SaveAs2?.(filePath, WD_FORMAT_DOCUMENT_DEFAULT))) return true;
+  if (await safeWrite(() => document?.saveAs2?.(filePath, WD_FORMAT_DOCUMENT_DEFAULT))) return true;
+  if (await safeWrite(() => document?.SaveAs?.(filePath, WD_FORMAT_DOCUMENT_DEFAULT))) return true;
+  if (await safeWrite(() => document?.saveAs?.(filePath, WD_FORMAT_DOCUMENT_DEFAULT))) return true;
+  return false;
+}
+
+async function getDocumentContentRange(document: any): Promise<any | null> {
+  return (
+    (await safeRead(() => document?.Content)) ??
+    (await safeRead(() => document?.content)) ??
+    (await safeRead(() => document?.Range?.())) ??
+    (await safeRead(() => document?.range?.())) ??
+    null
+  );
+}
+
+async function clearDocumentContent(document: any): Promise<void> {
+  const contentRange = await getDocumentContentRange(document);
+  if (!contentRange) return;
+  await safeWrite(() => {
+    (contentRange as { Text?: string }).Text = "";
+  });
+}
+
+async function documentHasVisibleContent(document: any): Promise<boolean> {
+  const contentRange = await getDocumentContentRange(document);
+  const text = String((await safeRead(() => contentRange?.Text)) || "").replace(/[\r\n\s]/g, "");
+  return text.length > 0;
+}
+
+async function pasteClipboardToDocument(targetDocument: any): Promise<boolean> {
+  await clearDocumentContent(targetDocument);
+  const insertionRange =
+    (await safeRead(() => targetDocument?.Range?.(0, 0))) ??
+    (await safeRead(() => targetDocument?.range?.(0, 0))) ??
+    (await safeRead(() => targetDocument?.Content)) ??
+    (await safeRead(() => targetDocument?.content));
+  if (!insertionRange) return false;
+
+  await safeWrite(() => insertionRange?.Collapse?.(WD_COLLAPSE_START));
+  await safeWrite(() => insertionRange?.collapse?.(WD_COLLAPSE_START));
+  if (await safeWrite(() => insertionRange?.Paste?.())) return true;
+  if (await safeWrite(() => insertionRange?.paste?.())) return true;
+  return documentHasVisibleContent(targetDocument);
+}
+
+async function writePlainTextToDocument(text: string, targetDocument: any): Promise<boolean> {
+  await clearDocumentContent(targetDocument);
+  const contentRange = await getDocumentContentRange(targetDocument);
+  if (!contentRange || !text.length) return false;
+  return safeWrite(() => {
+    (contentRange as { Text?: string }).Text = text;
+  });
+}
+
+export async function splitDocumentByHeadingRange(
+  app: any,
+  options: SplitDocumentByHeadingOptions
+): Promise<SplitDocumentByHeadingResult> {
+  const pageFrom = Number(options.pageFrom);
+  const pageTo = Number(options.pageTo);
+  const headingLevel = Number(options.headingLevel);
+  const outputDirectory = normalizeOutputDirectory(String(options.outputDirectory || ""));
+
+  if (!Number.isFinite(pageFrom) || pageFrom <= 0 || !Number.isFinite(pageTo) || pageTo <= 0) {
+    throw new Error("页码范围无效。");
+  }
+  if (pageTo < pageFrom) {
+    throw new Error("结束页码不能小于起始页码。");
+  }
+  if (!Number.isFinite(headingLevel) || headingLevel < 1 || headingLevel > 9) {
+    throw new Error("标题级别必须在 1 到 9 之间。");
+  }
+  if (!outputDirectory) {
+    throw new Error("导出目录不能为空。");
+  }
+
+  const activeDocument = await getDocument(app);
+  const contentRange =
+    (await safeRead(() => activeDocument?.Content)) ??
+    (await safeRead(() => activeDocument?.Range?.())) ??
+    (await safeRead(() => activeDocument?.range?.()));
+  const documentEnd = Number((await safeRead(() => contentRange?.End)) || 0);
+  if (!Number.isFinite(documentEnd) || documentEnd <= 0) {
+    throw new Error("无法读取当前文档内容范围。");
+  }
+
+  const paragraphsRoot = await safeRead(() => activeDocument?.Paragraphs);
+  const paragraphCount = Number((await safeRead(() => paragraphsRoot?.Count)) || 0);
+  if (!paragraphsRoot || !Number.isFinite(paragraphCount) || paragraphCount <= 0) {
+    return { totalSections: 0, exported: 0, skipped: 0, files: [] };
+  }
+
+  const emitProgress = async (progress: SplitDocumentProgress): Promise<void> => {
+    try {
+      await options.onProgress?.(progress);
+    } catch {
+      // Ignore UI callback errors to avoid interrupting export.
+    }
+  };
+
+  const markers: SplitHeadingMarker[] = [];
+  const candidateMarkerIndexes: number[] = [];
+  let exportUpperBound = documentEnd;
+  let scanned = 0;
+
+  await emitProgress({
+    phase: "scan",
+    scanned: 0,
+    scanTotal: paragraphCount,
+    current: 0,
+    total: 0,
+    exported: 0,
+    skipped: 0,
+    currentTitle: "",
+  });
+
+  for (let index = 1; index <= paragraphCount; index += 1) {
+    scanned += 1;
+    if (scanned % 25 === 0) {
+      await emitProgress({
+        phase: "scan",
+        scanned,
+        scanTotal: paragraphCount,
+        current: 0,
+        total: 0,
+        exported: 0,
+        skipped: 0,
+        currentTitle: "",
+      });
+    }
+    const paragraph =
+      (await safeRead(() => paragraphsRoot?.Item?.(index))) ??
+      (await safeRead(() => paragraphsRoot?.item?.(index))) ??
+      (await safeRead(() => paragraphsRoot?.[index]));
+    if (!paragraph) continue;
+
+    const paragraphRange = await safeRead(() => paragraph?.Range);
+    if (!paragraphRange) continue;
+
+    const start = Number((await safeRead(() => paragraphRange?.Start)) || 0);
+    if (!Number.isFinite(start) || start <= 0 || start >= documentEnd) continue;
+
+    let page = await getRangePageNumber(paragraphRange);
+    if (page <= 0) {
+      page = await getRangeStartPageNumber(paragraphRange);
+    }
+    if (page <= 0) continue;
+
+    if (page > pageTo) {
+      exportUpperBound = Math.min(exportUpperBound, start);
+      await emitProgress({
+        phase: "scan",
+        scanned,
+        scanTotal: paragraphCount,
+        current: 0,
+        total: 0,
+        exported: 0,
+        skipped: 0,
+        currentTitle: "",
+      });
+      break;
+    }
+    if (page < pageFrom) {
+      continue;
+    }
+
+    const resolvedLevel = await resolveParagraphHeadingLevel(paragraph, paragraphRange);
+    if (resolvedLevel < 1 || resolvedLevel > headingLevel) continue;
+
+    const marker: SplitHeadingMarker = {
+      start,
+      headingLevel: resolvedLevel,
+      title: resolvedLevel === headingLevel ? await getRangeText(paragraphRange) : "",
+    };
+    const markerIndex = markers.push(marker) - 1;
+    if (resolvedLevel === headingLevel) {
+      candidateMarkerIndexes.push(markerIndex);
+    }
+
+    if (scanned === paragraphCount) {
+      await emitProgress({
+        phase: "scan",
+        scanned,
+        scanTotal: paragraphCount,
+        current: 0,
+        total: 0,
+        exported: 0,
+        skipped: 0,
+        currentTitle: "",
+      });
+    }
+  }
+
+  if (scanned < paragraphCount) {
+    await emitProgress({
+      phase: "scan",
+      scanned,
+      scanTotal: paragraphCount,
+      current: 0,
+      total: 0,
+      exported: 0,
+      skipped: 0,
+      currentTitle: "",
+    });
+  }
+
+  if (!candidateMarkerIndexes.length) {
+    throw new Error(`在第 ${pageFrom}~${pageTo} 页内未找到 ${headingLevel} 级标题。`);
+  }
+
+  const usedFileNames = new Set<string>();
+  const files: string[] = [];
+  let exported = 0;
+  let skipped = 0;
+  const total = candidateMarkerIndexes.length;
+
+  await emitProgress({
+    phase: "export",
+    scanned,
+    scanTotal: paragraphCount,
+    current: 0,
+    total,
+    exported,
+    skipped,
+    currentTitle: "",
+  });
+
+  for (let index = 0; index < candidateMarkerIndexes.length; index += 1) {
+    const markerIndex = candidateMarkerIndexes[index];
+    const heading = markers[markerIndex];
+    let sectionEnd = exportUpperBound;
+    for (let nextIndex = markerIndex + 1; nextIndex < markers.length; nextIndex += 1) {
+      const nextMarker = markers[nextIndex];
+      if (nextMarker.headingLevel <= headingLevel) {
+        sectionEnd = Math.min(sectionEnd, nextMarker.start);
+        break;
+      }
+    }
+
+    if (!Number.isFinite(sectionEnd) || sectionEnd <= heading.start) {
+      skipped += 1;
+      await emitProgress({
+        phase: "export",
+        scanned,
+        scanTotal: paragraphCount,
+        current: index + 1,
+        total,
+        exported,
+        skipped,
+        currentTitle: heading.title,
+      });
+      continue;
+    }
+
+    const sectionRange =
+      (await safeRead(() => activeDocument?.Range?.(heading.start, sectionEnd))) ??
+      (await safeRead(() => activeDocument?.range?.(heading.start, sectionEnd)));
+    if (!sectionRange) {
+      skipped += 1;
+      await emitProgress({
+        phase: "export",
+        scanned,
+        scanTotal: paragraphCount,
+        current: index + 1,
+        total,
+        exported,
+        skipped,
+        currentTitle: heading.title,
+      });
+      continue;
+    }
+
+    const logicalIndex = index + 1;
+    const baseName = normalizeHeadingFileName(heading.title || `章节_${logicalIndex}`, logicalIndex);
+    let fileName = baseName;
+    let suffix = 2;
+    while (usedFileNames.has(fileName.toLowerCase())) {
+      fileName = baseName.replace(/\.docx$/i, `_${suffix}.docx`);
+      suffix += 1;
+    }
+    usedFileNames.add(fileName.toLowerCase());
+    const filePath = buildPathUnderDirectory(outputDirectory, fileName);
+    const copiedToClipboard = (await safeWrite(() => sectionRange?.Copy?.())) || (await safeWrite(() => sectionRange?.copy?.()));
+
+    const newDocument =
+      (await safeRead(() => app?.Documents?.Add?.())) ??
+      (await safeRead(() => app?.documents?.add?.()));
+    if (!newDocument) {
+      throw new Error("当前 WPS 环境不支持创建新文档，无法执行拆分导出。");
+    }
+
+    try {
+      const copied = copiedToClipboard ? await pasteClipboardToDocument(newDocument) : false;
+      if (!copied) {
+        const text = String((await safeRead(() => sectionRange?.Text)) || "");
+        if (!(await writePlainTextToDocument(text, newDocument))) {
+          skipped += 1;
+          await emitProgress({
+            phase: "export",
+            scanned,
+            scanTotal: paragraphCount,
+            current: index + 1,
+            total,
+            exported,
+            skipped,
+            currentTitle: heading.title,
+          });
+          continue;
+        }
+      }
+
+      const saved = await saveDocumentAsDocx(newDocument, filePath);
+      if (!saved) {
+        throw new Error(`保存失败：${filePath}`);
+      }
+
+      files.push(filePath);
+      exported += 1;
+      await emitProgress({
+        phase: "export",
+        scanned,
+        scanTotal: paragraphCount,
+        current: index + 1,
+        total,
+        exported,
+        skipped,
+        currentTitle: heading.title,
+      });
+    } finally {
+      await closeDocumentSilently(newDocument);
+    }
+  }
+
+  await emitProgress({
+    phase: "done",
+    scanned,
+    scanTotal: paragraphCount,
+    current: total,
+    total,
+    exported,
+    skipped,
+    currentTitle: "",
+  });
+
+  return {
+    totalSections: total,
+    exported,
+    skipped,
+    files,
+  };
 }
 
 export async function getSelectionText(app: any): Promise<string> {

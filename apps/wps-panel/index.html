@@ -9,14 +9,26 @@
     <main class="panel">
       <header class="panel-header">
         <div class="brand-block">
-          <h1>Codex</h1>
-          <p class="brand-kicker">WPS Word</p>
+          <div class="brand-copy">
+            <p class="brand-kicker">WPS Word Copilot</p>
+            <h1>Codex 文档工作台</h1>
+            <p class="brand-summary">把写作、审阅、样式处理和会话沉淀收拢到一个侧边栏。</p>
+          </div>
           <nav class="header-actions" aria-label="快捷控制">
-            <button id="new-chat-session" class="icon-button" type="button" title="新建会话">＋</button>
-            <button id="manage-chat-sessions" class="icon-button" type="button" title="会话管理">⧉</button>
-            <button id="open-style-tool" class="icon-button" type="button" title="样式处理">⌗</button>
-            <button id="settings-toggle" class="icon-button" type="button" title="设置">⚙</button>
-            <button id="close-panel" class="icon-button" type="button" title="关闭面板">↗</button>
+            <button id="new-chat-session" class="icon-button nav-pill nav-pill--primary" type="button" title="新建会话">
+              <span class="nav-pill__glyph">＋</span>
+              <span class="nav-pill__text">新对话</span>
+            </button>
+            <button id="manage-chat-sessions" class="icon-button nav-pill" type="button" title="会话管理">
+              <span class="nav-pill__glyph">⧉</span>
+              <span class="nav-pill__text">会话库</span>
+            </button>
+            <button id="open-style-tool" class="icon-button nav-pill" type="button" title="文档处理">
+              <span class="nav-pill__glyph">⌗</span>
+              <span class="nav-pill__text">文档工坊</span>
+            </button>
+            <button id="settings-toggle" class="icon-button nav-pill nav-pill--icon" type="button" title="设置">⚙</button>
+            <button id="close-panel" class="icon-button nav-pill nav-pill--icon" type="button" title="关闭面板">↗</button>
           </nav>
         </div>
       </header>
@@ -25,7 +37,14 @@
         <div class="session-manager-fixed">
           <div class="session-manager-top">
             <div>
-              <span class="section-title">会话中心</span>
+              <span class="section-eyebrow">Knowledge</span>
+              <div class="section-title-row">
+                <span class="section-title">会话中心</span>
+                <span class="help-popover" tabindex="0" aria-label="功能说明">
+                  ?
+                  <span class="help-popover__bubble" role="tooltip">按文档保留写作过程，支持检索、置顶、重命名和导出。</span>
+                </span>
+              </div>
               <div id="session-document-label" class="session-document-label">当前文档：未绑定</div>
             </div>
             <div class="session-manager-actions">
@@ -48,8 +67,9 @@
         <div class="style-tool-page__fixed">
           <div class="style-tool__header">
             <div>
-              <span class="section-title">样式批量处理</span>
-              <div class="session-document-label">按页码范围批量处理指定对象类型文字。</div>
+              <span class="section-eyebrow">Document Workflow</span>
+              <span class="section-title">文档工坊</span>
+              <div class="session-document-label">从读取样式、生成规则到批量应用和章节导出，按处理顺序组织。</div>
             </div>
             <div class="style-tool-page__actions">
               <button id="refresh-style-options" class="button-secondary" type="button">刷新样式</button>
@@ -58,18 +78,59 @@
           </div>
         </div>
         <div class="style-tool-page__body">
-          <section class="style-tool style-tool--inspect" aria-label="样式读取与描述">
-            <div class="style-tool__sub-title">读取光标/所选内容样式并转自然语言</div>
-            <div class="style-tool__actions style-tool__actions--end">
-              <button id="inspect-style-selection" type="button">读取所选内容样式</button>
+          <aside class="style-workflow-nav" aria-label="文档工坊功能导航">
+            <a class="style-workflow-nav__item" href="#style-tool-inspect">
+              <span class="style-workflow-nav__num">01</span>
+              <span class="style-workflow-nav__label">读取样式</span>
+            </a>
+            <a class="style-workflow-nav__item" href="#style-tool-nl">
+              <span class="style-workflow-nav__num">02</span>
+              <span class="style-workflow-nav__label">创建样式集</span>
+            </a>
+            <a class="style-workflow-nav__item" href="#style-tool-apply">
+              <span class="style-workflow-nav__num">03</span>
+              <span class="style-workflow-nav__label">批量应用</span>
+            </a>
+            <a class="style-workflow-nav__item" href="#style-tool-split">
+              <span class="style-workflow-nav__num">04</span>
+              <span class="style-workflow-nav__label">章节导出</span>
+            </a>
+          </aside>
+          <div class="style-workflow-panels">
+          <section id="style-tool-inspect" class="style-tool style-tool--inspect" aria-label="样式读取与描述">
+            <div class="tool-card__head">
+              <span class="tool-card__step">01</span>
+              <div>
+                <div class="style-tool__title-row">
+                  <div class="style-tool__sub-title">读取样式</div>
+                  <span class="help-popover" tabindex="0" aria-label="功能说明">
+                    ?
+                    <span class="help-popover__bubble" role="tooltip">先把光标或选区的真实格式转成自然语言，作为后续样式模板的基准。</span>
+                  </span>
+                </div>
+              </div>
             </div>
             <label>
               <span>自然语言描述</span>
               <textarea id="style-inspect-nl-output" class="style-inspect-output" rows="6" readonly></textarea>
             </label>
+            <div class="style-tool__actions style-tool__actions--end">
+              <button id="inspect-style-selection" type="button">读取所选内容样式</button>
+            </div>
           </section>
-          <section class="style-tool style-tool--nl" aria-label="自然语言样式集">
-            <div class="style-tool__sub-title">自然语言创建/更新样式集</div>
+          <section id="style-tool-nl" class="style-tool style-tool--nl" aria-label="自然语言样式集">
+            <div class="tool-card__head">
+              <span class="tool-card__step">02</span>
+              <div>
+                <div class="style-tool__title-row">
+                  <div class="style-tool__sub-title">创建样式集</div>
+                  <span class="help-popover" tabindex="0" aria-label="功能说明">
+                    ?
+                    <span class="help-popover__bubble" role="tooltip">用一句规范描述生成或更新 WPS 样式，常用规则可保存为模板反复调用。</span>
+                  </span>
+                </div>
+              </div>
+            </div>
             <label>
               <span>样式要求</span>
               <textarea
@@ -99,7 +160,19 @@
               <button id="apply-style-nl" type="button">创建/更新样式集</button>
             </div>
           </section>
-          <section class="style-tool" aria-label="样式批量处理">
+          <section id="style-tool-apply" class="style-tool" aria-label="样式批量处理">
+            <div class="tool-card__head">
+              <span class="tool-card__step">03</span>
+              <div>
+                <div class="style-tool__title-row">
+                  <div class="style-tool__sub-title">批量应用</div>
+                  <span class="help-popover" tabindex="0" aria-label="功能说明">
+                    ?
+                    <span class="help-popover__bubble" role="tooltip">限定页码和对象类型，把样式或引号字体精确应用到目标内容。</span>
+                  </span>
+                </div>
+              </div>
+            </div>
             <div class="style-tool__grid">
               <label>
                 <span>起始页码</span>
@@ -137,13 +210,75 @@
               <button id="apply-quote-font-range" class="button-secondary" type="button">应用引号字体</button>
             </div>
           </section>
+          <section id="style-tool-split" class="style-tool" aria-label="按章节拆分导出">
+            <div class="tool-card__head">
+              <span class="tool-card__step">04</span>
+              <div>
+                <div class="style-tool__title-row">
+                  <div class="style-tool__sub-title">章节导出</div>
+                  <span class="help-popover" tabindex="0" aria-label="功能说明">
+                    ?
+                    <span class="help-popover__bubble" role="tooltip">按页码范围和标题级别切分长文档，进度会实时显示扫描与导出状态。</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="style-tool__grid">
+              <label>
+                <span>起始页码</span>
+                <input id="split-page-from" type="number" min="1" step="1" placeholder="如 1" />
+              </label>
+              <label>
+                <span>结束页码</span>
+                <input id="split-page-to" type="number" min="1" step="1" placeholder="如 593" />
+              </label>
+              <label>
+                <span>拆分粒度</span>
+                <select id="split-heading-level">
+                  <option value="1">标题1（一级标题）</option>
+                  <option value="2">标题2（二级标题）</option>
+                  <option value="3">标题3（三级标题）</option>
+                  <option value="4">标题4（四级标题）</option>
+                  <option value="5">标题5（五级标题）</option>
+                  <option value="6">标题6（六级标题）</option>
+                  <option value="7">标题7（七级标题）</option>
+                  <option value="8">标题8（八级标题）</option>
+                  <option value="9">标题9（九级标题）</option>
+                </select>
+              </label>
+              <label>
+                <span>保存目录</span>
+                <input id="split-output-dir" type="text" placeholder="如 D:\导出\章节拆分" />
+              </label>
+            </div>
+            <div class="style-tool__actions style-tool__actions--end">
+              <button id="split-docx-by-heading" type="button">按章节拆分导出</button>
+            </div>
+            <div id="split-progress" class="split-progress" hidden aria-live="polite">
+              <div class="split-progress__track">
+                <div id="split-progress-bar" class="split-progress__bar"></div>
+              </div>
+              <div id="split-progress-text" class="split-progress__text">等待开始</div>
+            </div>
+          </section>
+          </div>
         </div>
       </section>
 
       <section id="chat-page" class="chat">
         <div class="context-toolbar" aria-label="上下文和动作">
+          <div class="toolbar-intro">
+            <span class="section-eyebrow">Writing Flow</span>
+            <div class="section-title-row">
+              <span class="section-title">对话写作</span>
+              <span class="help-popover" tabindex="0" aria-label="功能说明">
+                ?
+                <span class="help-popover__bubble" role="tooltip">先选内容范围，再选任务模板和输出策略；发送后可写回选区、插入回复或生成插图。</span>
+              </span>
+            </div>
+          </div>
           <label>
-            <span>上下文范围</span>
+            <span>1. 内容范围</span>
             <select id="context-scope">
               <option value="selection">当前选区</option>
               <option value="paragraph">当前段落</option>
@@ -152,7 +287,7 @@
             </select>
           </label>
           <label>
-            <span>预设动作</span>
+            <span>2. 任务模板</span>
             <select id="prompt-preset">
               <option value="custom">自定义</option>
               <option value="polish">润色</option>
@@ -162,12 +297,13 @@
               <option value="summary">摘要</option>
               <option value="translate">翻译</option>
               <option value="typo">错别字检查</option>
+              <option value="punctuation-fragments">标点检查</option>
               <option value="contract-review">合同审查</option>
               <option value="meeting-minutes">会议纪要</option>
             </select>
           </label>
           <label>
-            <span>能力模式</span>
+            <span>3. 输出策略</span>
             <select id="capability-profile">
               <option value="word-rewrite">Word 正文</option>
               <option value="word-review">审阅建议</option>
@@ -178,6 +314,7 @@
         <div id="chat-log" class="chat-log" aria-live="polite"></div>
 
         <div class="run-controls" aria-label="运行参数">
+          <div class="run-controls__title">执行参数</div>
           <label>
             <span>模式</span>
             <select id="mode">
@@ -216,10 +353,22 @@
         </div>
 
         <nav class="chat-tools" aria-label="文档动作">
-          <button id="chat-apply-selection" class="tool-icon" type="button" disabled title="写回选区">⇱</button>
-          <button id="chat-insert-text" class="tool-icon" type="button" disabled title="插入回复">⌁</button>
-          <button id="chat-insert-image" class="tool-icon" type="button" disabled title="插入插图">⌕</button>
-          <button id="chat-upload-image" class="tool-icon" type="button" title="上传文件">⇧</button>
+          <button id="chat-apply-selection" class="tool-icon" type="button" disabled title="写回选区">
+            <span class="tool-icon__glyph">⇱</span>
+            <span class="tool-icon__label">写回</span>
+          </button>
+          <button id="chat-insert-text" class="tool-icon" type="button" disabled title="插入回复">
+            <span class="tool-icon__glyph">⌁</span>
+            <span class="tool-icon__label">插入</span>
+          </button>
+          <button id="chat-insert-image" class="tool-icon" type="button" disabled title="插入插图">
+            <span class="tool-icon__glyph">⌕</span>
+            <span class="tool-icon__label">插图</span>
+          </button>
+          <button id="chat-upload-image" class="tool-icon" type="button" title="上传文件">
+            <span class="tool-icon__glyph">⇧</span>
+            <span class="tool-icon__label">附件</span>
+          </button>
           <input id="chat-image-file" type="file" multiple hidden />
         </nav>
       </section>

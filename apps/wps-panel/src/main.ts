@@ -44,6 +44,8 @@ import {
   listAvailableStyles,
   replaceSelection,
   replaceSelectionWithTable,
+  splitDocumentByHeadingRange,
+  type SplitDocumentProgress,
   type StyleTargetType,
 } from "./wps-adapter";
 import type { SelectionStyleDescriptionResult } from "./style-inspector-types";
@@ -153,6 +155,14 @@ const styleNameOptionsEl = document.querySelector<HTMLDivElement>("#style-name-o
 const showAllStylesEl = document.querySelector<HTMLInputElement>("#show-all-styles");
 const applyStyleRangeBtn = document.querySelector<HTMLButtonElement>("#apply-style-range");
 const applyQuoteFontRangeBtn = document.querySelector<HTMLButtonElement>("#apply-quote-font-range");
+const splitPageFromEl = document.querySelector<HTMLInputElement>("#split-page-from");
+const splitPageToEl = document.querySelector<HTMLInputElement>("#split-page-to");
+const splitHeadingLevelEl = document.querySelector<HTMLSelectElement>("#split-heading-level");
+const splitOutputDirEl = document.querySelector<HTMLInputElement>("#split-output-dir");
+const splitDocxByHeadingBtn = document.querySelector<HTMLButtonElement>("#split-docx-by-heading");
+const splitProgressEl = document.querySelector<HTMLDivElement>("#split-progress");
+const splitProgressBarEl = document.querySelector<HTMLDivElement>("#split-progress-bar");
+const splitProgressTextEl = document.querySelector<HTMLDivElement>("#split-progress-text");
 const styleNlInputEl = document.querySelector<HTMLTextAreaElement>("#style-nl-input");
 const applyStyleNlBtn = document.querySelector<HTMLButtonElement>("#apply-style-nl");
 const inspectStyleSelectionBtn = document.querySelector<HTMLButtonElement>("#inspect-style-selection");
@@ -174,11 +184,111 @@ const diffDescriptionEl = document.querySelector<HTMLParagraphElement>("#diff-de
 const diffCopyBtn = document.querySelector<HTMLButtonElement>("#diff-copy");
 const diffCancelBtn = document.querySelector<HTMLButtonElement>("#diff-cancel");
 const diffConfirmBtn = document.querySelector<HTMLButtonElement>("#diff-confirm");
+let splitProgressSignature = "";
+let activeHelpPopoverEl: HTMLElement | null = null;
+let helpTooltipEl: HTMLDivElement | null = null;
 
 function setStatus(message: string, isError = false): void {
   if (!statusEl) return;
   statusEl.textContent = message;
   statusEl.dataset.error = isError ? "1" : "0";
+}
+
+function ensureHelpTooltip(): HTMLDivElement {
+  if (helpTooltipEl) return helpTooltipEl;
+  helpTooltipEl = document.createElement("div");
+  helpTooltipEl.className = "help-tooltip-portal";
+  helpTooltipEl.hidden = true;
+  document.body.appendChild(helpTooltipEl);
+  return helpTooltipEl;
+}
+
+function positionHelpTooltip(source: HTMLElement): void {
+  if (!helpTooltipEl || helpTooltipEl.hidden) return;
+  const rect = source.getBoundingClientRect();
+  const gap = 10;
+  const margin = 8;
+  helpTooltipEl.style.maxWidth = `${Math.min(280, Math.max(180, window.innerWidth - margin * 2))}px`;
+  const tooltipRect = helpTooltipEl.getBoundingClientRect();
+  let left = rect.left + rect.width / 2 - tooltipRect.width / 2;
+  left = Math.max(margin, Math.min(window.innerWidth - tooltipRect.width - margin, left));
+  let top = rect.bottom + gap;
+  if (top + tooltipRect.height > window.innerHeight - margin) {
+    top = rect.top - tooltipRect.height - gap;
+  }
+  top = Math.max(margin, Math.min(window.innerHeight - tooltipRect.height - margin, top));
+  helpTooltipEl.style.left = `${left}px`;
+  helpTooltipEl.style.top = `${top}px`;
+}
+
+function showHelpTooltip(source: HTMLElement): void {
+  const bubble = source.querySelector<HTMLElement>(".help-popover__bubble");
+  const text = bubble?.textContent?.trim() || source.getAttribute("aria-label") || "";
+  if (!text) return;
+  activeHelpPopoverEl = source;
+  const tooltip = ensureHelpTooltip();
+  tooltip.textContent = text;
+  tooltip.hidden = false;
+  positionHelpTooltip(source);
+}
+
+function hideHelpTooltip(source?: HTMLElement): void {
+  if (source && activeHelpPopoverEl !== source) return;
+  activeHelpPopoverEl = null;
+  if (helpTooltipEl) helpTooltipEl.hidden = true;
+}
+
+function setSplitProgress(percent: number, text: string, isError = false): void {
+  if (!splitProgressEl || !splitProgressBarEl || !splitProgressTextEl) return;
+  const clamped = Math.max(0, Math.min(100, percent));
+  const signature = `${clamped}|${isError ? 1 : 0}|${text}`;
+  if (splitProgressSignature === signature) return;
+  splitProgressSignature = signature;
+  splitProgressEl.hidden = false;
+  splitProgressEl.classList.toggle("is-error", isError);
+  splitProgressBarEl.style.width = `${clamped}%`;
+  splitProgressTextEl.textContent = text;
+}
+
+function resetSplitProgress(): void {
+  splitProgressSignature = "";
+  if (!splitProgressEl || !splitProgressBarEl || !splitProgressTextEl) return;
+  splitProgressEl.hidden = true;
+  splitProgressEl.classList.remove("is-error");
+  splitProgressBarEl.style.width = "0%";
+  splitProgressTextEl.textContent = "等待开始";
+}
+
+function trimSplitTitle(input: string, limit = 24): string {
+  const text = String(input || "").replace(/\s+/g, " ").trim();
+  if (!text) return "";
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
+}
+
+function renderSplitProgress(progress: SplitDocumentProgress): void {
+  if (progress.phase === "scan") {
+    const ratio = progress.scanTotal > 0 ? progress.scanned / progress.scanTotal : 0;
+    const percent = Math.floor(ratio * 35);
+    setSplitProgress(percent, `正在扫描文档结构：${progress.scanned}/${progress.scanTotal}`);
+    return;
+  }
+  if (progress.phase === "export") {
+    const ratio = progress.total > 0 ? progress.current / progress.total : 0;
+    const percent = 35 + Math.floor(ratio * 65);
+    const heading = trimSplitTitle(progress.currentTitle);
+    const suffix = heading ? `，当前：${heading}` : "";
+    setSplitProgress(percent, `正在导出：${progress.current}/${progress.total}，成功 ${progress.exported}，跳过 ${progress.skipped}${suffix}`);
+    return;
+  }
+  setSplitProgress(100, `导出完成：成功 ${progress.exported}，跳过 ${progress.skipped}`);
+}
+
+function waitForUiPaint(): Promise<void> {
+  return new Promise((resolve) => {
+    window.requestAnimationFrame(() => {
+      window.setTimeout(resolve, 0);
+    });
+  });
 }
 
 function sortSessionsForDisplay(items: ChatSessionRecord[]): ChatSessionRecord[] {
@@ -278,6 +388,7 @@ function selectedPromptPreset(): PromptPresetId {
     "summary",
     "translate",
     "typo",
+    "punctuation-fragments",
     "contract-review",
     "meeting-minutes",
   ].includes(value)
@@ -375,8 +486,9 @@ function generatedSessionTitle(session: ChatSessionRecord): string {
 }
 
 function sessionDisplayTitle(session: ChatSessionRecord): string {
-  if (session.title && session.title !== INITIAL_SESSION_TITLE) return session.title;
-  return generatedSessionTitle(session);
+  const title = session.title && session.title !== INITIAL_SESSION_TITLE ? session.title : generatedSessionTitle(session);
+  const time = compactDateTime(session.createdAt).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return title.replace(new RegExp(`\\s+${time}$`), "").trim() || title;
 }
 
 function sessionTitleTime(session: ChatSessionRecord): string {
@@ -582,7 +694,7 @@ function renderSessionList(): void {
     const item = document.createElement("div");
     item.role = "button";
     item.tabIndex = 0;
-    item.className = `session-item${session.id === activeSessionId ? " is-active" : ""}${session.pinned ? " is-pinned" : ""}${
+    item.className = `session-item${multiSelectMode ? " is-multiselect" : ""}${session.id === activeSessionId ? " is-active" : ""}${session.pinned ? " is-pinned" : ""}${
       selectedSessionIds.has(session.id) ? " is-selected" : ""
     }`;
     item.title = `${sessionDisplayTitle(session)}\n${formatSessionMeta(session)}`;
@@ -760,16 +872,28 @@ function setBusy(isBusy: boolean): void {
     sessionBackChatBtn,
     refreshStyleOptionsBtn,
     applyStyleRangeBtn,
+    splitDocxByHeadingBtn,
     applyStyleNlBtn,
     inspectStyleSelectionBtn,
   ].forEach((btn) => {
     if (btn) btn.disabled = isBusy;
   });
-  [sessionSearchEl, stylePageFromEl, stylePageToEl, styleTargetTypeEl, styleNameEl, showAllStylesEl, styleNlInputEl].forEach(
-    (el) => {
-      if (el) el.disabled = isBusy;
-    }
-  );
+  [
+    sessionSearchEl,
+    stylePageFromEl,
+    stylePageToEl,
+    styleTargetTypeEl,
+    styleNameEl,
+    styleQuoteFontEl,
+    showAllStylesEl,
+    splitPageFromEl,
+    splitPageToEl,
+    splitHeadingLevelEl,
+    splitOutputDirEl,
+    styleNlInputEl,
+  ].forEach((el) => {
+    if (el) el.disabled = isBusy;
+  });
   if (styleInspectNlOutputEl) styleInspectNlOutputEl.readOnly = true;
   if (chatStopBtn) chatStopBtn.disabled = !isBusy || !activeStreamAbortController;
   updateRunToggleButton();
@@ -1115,6 +1239,50 @@ async function applyQuoteFontRange(): Promise<void> {
     fontName,
   });
   setStatus(`引号字体处理完成：命中 ${result.matched} 个引号，成功 ${result.updated} 个，跳过 ${result.skipped} 个。`, result.updated === 0);
+}
+
+async function splitDocxByHeading(): Promise<void> {
+  resetSplitProgress();
+  const pageFrom = Number(splitPageFromEl?.value || 0);
+  const pageTo = Number(splitPageToEl?.value || 0);
+  if (!Number.isFinite(pageFrom) || pageFrom <= 0 || !Number.isFinite(pageTo) || pageTo <= 0) {
+    throw new Error("请填写有效的拆分页码范围。");
+  }
+  if (pageTo < pageFrom) {
+    throw new Error("拆分结束页码不能小于起始页码。");
+  }
+
+  const headingLevel = Number(splitHeadingLevelEl?.value || 0);
+  if (!Number.isFinite(headingLevel) || headingLevel < 1 || headingLevel > 9) {
+    throw new Error("请先选择有效的拆分粒度（标题1-标题9）。");
+  }
+
+  const outputDirectory = String(splitOutputDirEl?.value || "").trim();
+  if (!outputDirectory) {
+    throw new Error("请先填写导出保存目录。");
+  }
+
+  setSplitProgress(0, "准备开始拆分...");
+  setStatus("正在按页码和标题级别拆分导出 DOCX，请稍候...");
+  await waitForUiPaint();
+  const app = await getApplication();
+  setSplitProgress(1, "正在读取当前文档...");
+  await waitForUiPaint();
+  const result = await splitDocumentByHeadingRange(app, {
+    pageFrom,
+    pageTo,
+    headingLevel,
+    outputDirectory,
+    onProgress: async (progress) => {
+      renderSplitProgress(progress);
+      await waitForUiPaint();
+    },
+  });
+
+  const preview = result.files.slice(0, 3).map((item) => item.split(/[/\\]/).pop() || item).join("、");
+  const suffix = result.files.length > 3 ? ` 等 ${result.files.length} 个文件。` : result.files.length ? ` 文件：${preview}。` : "";
+  setSplitProgress(100, `导出完成：成功 ${result.exported}，跳过 ${result.skipped}`);
+  setStatus(`拆分完成：识别 ${result.totalSections} 个章节，导出 ${result.exported} 个，跳过 ${result.skipped} 个。${suffix}`, result.exported === 0);
 }
 
 async function applyStyleSetByNaturalLanguage(): Promise<void> {
@@ -1658,6 +1826,7 @@ async function runChat(): Promise<void> {
 
   const prompt = buildPrompt(presetId, selectedContextScope(), input, contextNotice);
   const capability = getCapabilityProfile(selectedCapabilityProfile());
+  const capabilityInstruction = presetId === "punctuation-fragments" ? "" : capability.instruction;
   const userText = prompt.userText || "请结合当前上下文处理内容。";
   const userImages = active.pendingImages.slice();
   const userFiles = active.pendingFiles.slice();
@@ -1676,7 +1845,7 @@ async function runChat(): Promise<void> {
 
   const payload = basePayload(
     userText,
-    [capability.instruction, prompt.instruction, contextText].filter(Boolean).join("\n\n"),
+    [capabilityInstruction, prompt.instruction, contextText].filter(Boolean).join("\n\n"),
     imageAttachmentsFromPending(active),
     fileAttachmentsFromPending(active)
   );
@@ -2054,6 +2223,20 @@ applyQuoteFontRangeBtn?.addEventListener("click", () => {
     }
   })();
 });
+splitDocxByHeadingBtn?.addEventListener("click", () => {
+  void (async () => {
+    try {
+      setBusy(true);
+      await splitDocxByHeading();
+    } catch (error) {
+      const message = (error as Error).message;
+      setSplitProgress(100, `拆分失败：${message}`, true);
+      setStatus(message, true);
+    } finally {
+      setBusy(false);
+    }
+  })();
+});
 applyStyleNlBtn?.addEventListener("click", () => {
   void (async () => {
     try {
@@ -2199,8 +2382,31 @@ document.addEventListener("click", (event) => {
     closeSessionContextMenu();
   }
 });
+document.addEventListener("mouseover", (event) => {
+  const target = event.target as HTMLElement;
+  const popover = target.closest<HTMLElement>(".help-popover");
+  if (popover) showHelpTooltip(popover);
+});
+document.addEventListener("mouseout", (event) => {
+  const target = event.target as HTMLElement;
+  const popover = target.closest<HTMLElement>(".help-popover");
+  if (popover && !popover.contains(event.relatedTarget as Node | null)) hideHelpTooltip(popover);
+});
+document.addEventListener("focusin", (event) => {
+  const target = event.target as HTMLElement;
+  const popover = target.closest<HTMLElement>(".help-popover");
+  if (popover) showHelpTooltip(popover);
+});
+document.addEventListener("focusout", (event) => {
+  const target = event.target as HTMLElement;
+  const popover = target.closest<HTMLElement>(".help-popover");
+  if (popover) hideHelpTooltip(popover);
+});
+window.addEventListener("scroll", () => activeHelpPopoverEl && positionHelpTooltip(activeHelpPopoverEl), true);
+window.addEventListener("resize", () => activeHelpPopoverEl && positionHelpTooltip(activeHelpPopoverEl));
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
+    hideHelpTooltip();
     closeSessionContextMenu();
     closeSessionRenameDialog();
     closeStylePromptEditor();
@@ -2286,6 +2492,7 @@ void (async () => {
     setMultiSelectMode(false);
     loadStylePromptTemplates();
     renderStylePromptLibrary();
+    resetSplitProgress();
     await syncCurrentDocumentContext(true);
     sessions.forEach(ensureSessionTitle);
     persistAllSessions();
