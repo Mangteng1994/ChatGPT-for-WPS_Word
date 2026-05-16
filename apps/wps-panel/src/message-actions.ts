@@ -78,12 +78,47 @@ export function renderMessageText(target: HTMLElement, markdown: string): void {
   const html: string[] = [];
   let inCode = false;
   let code: string[] = [];
-  let list: "ul" | "ol" | "" = "";
+  const listStack: Array<{ kind: "ul" | "ol"; indent: number; openItem: boolean }> = [];
 
-  const closeList = () => {
-    if (!list) return;
-    html.push(`</${list}>`);
-    list = "";
+  const closeListItem = () => {
+    const current = listStack[listStack.length - 1];
+    if (!current?.openItem) return;
+    html.push("</li>");
+    current.openItem = false;
+  };
+
+  const closeListsToDepth = (depth: number) => {
+    while (listStack.length > depth) {
+      closeListItem();
+      const closed = listStack.pop();
+      if (closed) html.push(`</${closed.kind}>`);
+    }
+  };
+
+  const closeAllLists = () => {
+    closeListsToDepth(0);
+  };
+
+  const openListItem = (kind: "ul" | "ol", indent: number, content: string) => {
+    while (listStack.length && indent < listStack[listStack.length - 1].indent) {
+      closeListsToDepth(listStack.length - 1);
+    }
+
+    const current = listStack[listStack.length - 1];
+    if (!current || indent > current.indent) {
+      html.push(`<${kind}>`);
+      listStack.push({ kind, indent, openItem: false });
+    } else if (current.kind !== kind) {
+      closeListsToDepth(listStack.length - 1);
+      html.push(`<${kind}>`);
+      listStack.push({ kind, indent, openItem: false });
+    } else {
+      closeListItem();
+    }
+
+    const active = listStack[listStack.length - 1];
+    active.openItem = true;
+    html.push(`<li>${inlineMarkdown(content)}`);
   };
 
   for (let index = 0; index < lines.length; index += 1) {
@@ -95,7 +130,7 @@ export function renderMessageText(target: HTMLElement, markdown: string): void {
         code = [];
         inCode = false;
       } else {
-        closeList();
+        closeAllLists();
         inCode = true;
       }
       continue;
@@ -107,49 +142,44 @@ export function renderMessageText(target: HTMLElement, markdown: string): void {
 
     const table = renderTable(lines, index);
     if (table) {
-      closeList();
+      closeAllLists();
       html.push(table.html);
       index = table.next - 1;
       continue;
     }
 
     if (!line.trim()) {
-      closeList();
+      closeAllLists();
       continue;
     }
 
     const heading = line.match(/^(#{1,4})\s+(.+)$/);
     if (heading) {
-      closeList();
+      closeAllLists();
       const level = Math.min(heading[1].length + 1, 5);
       html.push(`<h${level}>${inlineMarkdown(heading[2])}</h${level}>`);
       continue;
     }
 
-    const ordered = line.match(/^\s*\d+[.)]\s+(.+)$/);
-    const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
-    if (ordered || unordered) {
-      const kind = ordered ? "ol" : "ul";
-      if (list !== kind) {
-        closeList();
-        list = kind;
-        html.push(`<${kind}>`);
-      }
-      html.push(`<li>${inlineMarkdown((ordered || unordered)![1])}</li>`);
+    const listItem = line.match(/^(\s*)(?:(\d+[.)])|([-*+]))\s+(.+)$/);
+    if (listItem) {
+      const indent = listItem[1].replace(/\t/g, "  ").length;
+      const kind = listItem[2] ? "ol" : "ul";
+      openListItem(kind, indent, listItem[4]);
       continue;
     }
 
     const quote = line.match(/^>\s*(.+)$/);
     if (quote) {
-      closeList();
+      closeAllLists();
       html.push(`<blockquote>${inlineMarkdown(quote[1])}</blockquote>`);
       continue;
     }
 
-    closeList();
+    closeAllLists();
     html.push(`<p>${inlineMarkdown(line)}</p>`);
   }
-  closeList();
+  closeAllLists();
   if (inCode) html.push(`<pre><code>${escapeHtml(code.join("\n"))}</code></pre>`);
   target.innerHTML = html.join("");
 }
