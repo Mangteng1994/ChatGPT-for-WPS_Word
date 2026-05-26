@@ -95,6 +95,10 @@
               <span class="style-workflow-nav__num">04</span>
               <span class="style-workflow-nav__label">章节导出</span>
             </a>
+            <a class="style-workflow-nav__item" href="#style-tool-diff">
+              <span class="style-workflow-nav__num">05</span>
+              <span class="style-workflow-nav__label">段落 Diff 对比</span>
+            </a>
           </aside>
           <div class="style-workflow-panels">
           <section id="style-tool-inspect" class="style-tool style-tool--inspect" aria-label="样式读取与描述">
@@ -182,32 +186,85 @@
                 <span>结束页码</span>
                 <input id="style-page-to" type="number" min="1" step="1" placeholder="如 5" />
               </label>
+            </div>
+            <div class="style-apply-switch">
               <label>
                 <span>对象类型</span>
-                <select id="style-target-type">
-                  <option value="image-paragraph">图片所在段落</option>
-                  <option value="image-caption">图片下图名</option>
-                  <option value="table-text">表格内文字</option>
-                  <option value="other-text">除标题、图片所在段落、表格文字以外所有文字</option>
+                <select id="style-apply-mode" aria-controls="style-apply-paragraph-panel style-apply-punctuation-panel">
+                  <option value="paragraph">段落</option>
+                  <option value="punctuation">标点</option>
                 </select>
               </label>
-              <label>
-                <span>样式名称</span>
-                <input id="style-name" type="text" placeholder="输入或选择样式名称" />
-                <div id="style-name-options" class="style-suggestions" hidden></div>
-              </label>
-              <label>
-                <span>引号字体</span>
-                <input id="style-quote-font" type="text" placeholder="如 宋体 / Times New Roman" />
-              </label>
             </div>
-            <div class="style-tool__actions">
-              <label class="style-tool__checkbox">
-                <input id="show-all-styles" type="checkbox" />
-                <span>显示全部样式</span>
-              </label>
-              <button id="apply-style-range" type="button">应用样式</button>
-              <button id="apply-quote-font-range" class="button-secondary" type="button">应用引号字体</button>
+            <div id="style-apply-paragraph-panel" class="style-apply-panel" role="region" aria-label="段落批量应用">
+              <div class="style-tool__grid">
+                <label>
+                  <span>段落</span>
+                  <select id="style-target-type">
+                    <option value="other-text">除标题、图片所在段落、表格文字以外所有文字</option>
+                    <option value="image-paragraph">图片所在段落</option>
+                    <option value="image-caption">图片下图名</option>
+                    <option value="table-text">表格文字</option>
+                  </select>
+                </label>
+                <label>
+                  <span>样式名称</span>
+                  <input id="style-name" type="text" placeholder="输入或选择样式名称" />
+                  <div id="style-name-options" class="style-suggestions" hidden></div>
+                </label>
+              </div>
+              <div class="style-tool__actions">
+                <label class="style-tool__checkbox">
+                  <input id="show-all-styles" type="checkbox" />
+                  <span>显示全部样式</span>
+                </label>
+                <button id="apply-style-range" type="button">应用</button>
+              </div>
+            </div>
+            <div
+              id="style-apply-punctuation-panel"
+              class="style-apply-panel"
+              role="tabpanel"
+              aria-label="标点批量应用"
+              hidden
+            >
+              <div class="style-tool__grid">
+                <div class="field">
+                  <span>标点</span>
+                  <div class="multi-select" id="punctuation-multiselect">
+                    <button
+                      id="punctuation-multiselect-toggle"
+                      class="multi-select__toggle"
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded="false"
+                    >
+                      <span id="punctuation-multiselect-label">引号</span>
+                    </button>
+                    <div id="punctuation-multiselect-menu" class="multi-select__menu" role="listbox" aria-label="标点类型" hidden>
+                      <label class="multi-select__option" role="option" aria-selected="true">
+                        <input id="punctuation-quote" type="checkbox" checked />
+                        <span>引号</span>
+                      </label>
+                      <label class="multi-select__option" role="option" aria-selected="false">
+                        <input id="punctuation-comma" type="checkbox" />
+                        <span>逗号</span>
+                      </label>
+                      <label class="multi-select__option" role="option" aria-selected="false">
+                        <input id="punctuation-colon" type="checkbox" />
+                        <span>冒号</span>
+                      </label>
+                    </div>
+                  </div>
+                </div>
+                <label>
+                  <span>字体</span>
+                  <input id="style-punctuation-font" type="text" placeholder="如 宋体 / Times New Roman" />
+                </label>
+              </div>
+              <div class="style-tool__actions style-tool__actions--end">
+                <button id="apply-punctuation-font-range" type="button">应用</button>
+              </div>
             </div>
           </section>
           <section id="style-tool-split" class="style-tool" aria-label="按章节拆分导出">
@@ -259,6 +316,35 @@
                 <div id="split-progress-bar" class="split-progress__bar"></div>
               </div>
               <div id="split-progress-text" class="split-progress__text">等待开始</div>
+            </div>
+          </section>
+          <section id="style-tool-diff" class="style-tool" aria-label="段落差异对比">
+            <div class="tool-card__head">
+              <span class="tool-card__step">05</span>
+              <div>
+                <div class="style-tool__title-row">
+                  <div class="style-tool__sub-title">段落 Diff 对比</div>
+                  <span class="help-popover" tabindex="0" aria-label="功能说明">
+                    ?
+                    <span class="help-popover__bubble" role="tooltip">输入两段文字，逐字符/逐词对比差异，并用并排视图高亮新增、删除和修改内容。</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="cw-diff-panel">
+              <div class="cw-diff-inputs">
+                <label>
+                  <span>段落 1（原始/旧版）</span>
+                  <textarea id="cw-diff-text1" class="cw-diff-input" rows="6" placeholder="请输入第一段文字..."></textarea>
+                </label>
+                <label>
+                  <span>段落 2（修改/新版）</span>
+                  <textarea id="cw-diff-text2" class="cw-diff-input" rows="6" placeholder="请输入第二段文字..."></textarea>
+                </label>
+              </div>
+              <div class="style-tool__actions style-tool__actions--end">
+                <button id="cw-diff-compare" type="button">比较</button>
+              </div>
             </div>
           </section>
           </div>
@@ -481,6 +567,27 @@
         </div>
       </section>
     </aside>
+
+    <div id="cw-diff-result-dialog" class="cw-diff-modal" hidden aria-hidden="true">
+      <div class="cw-diff-modal__backdrop" data-close="1"></div>
+      <section class="cw-diff-modal__content" role="dialog" aria-modal="true" aria-labelledby="cw-diff-result-title">
+        <header class="cw-diff-modal__header">
+          <h2 id="cw-diff-result-title">段落差异对比</h2>
+          <p class="hint">左侧为原始段落，右侧为修改后段落。浅红背景+删除线为删除内容，浅绿背景为新增内容。</p>
+        </header>
+        <div class="cw-diff-toolbar">
+          <span class="cw-diff-toolbar__label">视图：</span>
+          <button class="cw-diff-toolbar__btn is-active" data-cw-diff-view="side" type="button">左右对比</button>
+          <button class="cw-diff-toolbar__btn" data-cw-diff-view="merged" type="button">合并对比</button>
+        </div>
+        <div id="cw-diff-result-content" class="cw-diff-columns" aria-live="polite"></div>
+        <div id="cw-diff-result-merged" class="cw-diff-merged" aria-live="polite" hidden></div>
+        <footer class="cw-diff-modal__actions">
+          <button id="cw-diff-result-copy" class="button-secondary" type="button">复制对比结果</button>
+          <button id="cw-diff-result-close" class="button-secondary" type="button">关闭</button>
+        </footer>
+      </section>
+    </div>
 
     <div id="diff-modal" class="diff-modal" hidden aria-hidden="true">
       <div class="diff-modal__backdrop"></div>

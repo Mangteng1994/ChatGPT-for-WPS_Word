@@ -9,7 +9,7 @@ import {
   uploadImageAsset,
 } from "./api-client";
 import { getCapabilityProfile, type CapabilityProfileId } from "./capability-profiles";
-import { buildUnifiedDiff, hasMeaningfulDiff } from "./diff";
+import { buildCharDiff, buildUnifiedCharDiff, buildUnifiedDiff, hasCharDiff, hasMeaningfulDiff, type UnifiedDiffSegment } from "./diff";
 import { createMessageElement, renderMessageText, type MessageActionContext } from "./message-actions";
 import { buildPrompt, getPromptPreset, type ContextScope, type PromptPresetId } from "./prompt-presets";
 import { detectStructuredContent } from "./structured-content";
@@ -29,7 +29,7 @@ import {
 } from "./session-store";
 import {
   applyNaturalLanguageStyleSet,
-  applyQuoteFontByPageRange,
+  applyPunctuationFontByPageRange,
   applyStyleByPageRange,
   describeSelectionStyle,
   getCurrentParagraphText,
@@ -45,6 +45,7 @@ import {
   replaceSelection,
   replaceSelectionWithTable,
   splitDocumentByHeadingRange,
+  type PunctuationTargetType,
   type SplitDocumentProgress,
   type StyleTargetType,
 } from "./wps-adapter";
@@ -148,13 +149,23 @@ const capabilityProfileEl = document.querySelector<HTMLSelectElement>("#capabili
 const refreshStyleOptionsBtn = document.querySelector<HTMLButtonElement>("#refresh-style-options");
 const stylePageFromEl = document.querySelector<HTMLInputElement>("#style-page-from");
 const stylePageToEl = document.querySelector<HTMLInputElement>("#style-page-to");
+const styleApplyModeEl = document.querySelector<HTMLSelectElement>("#style-apply-mode");
+const styleApplyParagraphPanelEl = document.querySelector<HTMLDivElement>("#style-apply-paragraph-panel");
+const styleApplyPunctuationPanelEl = document.querySelector<HTMLDivElement>("#style-apply-punctuation-panel");
 const styleTargetTypeEl = document.querySelector<HTMLSelectElement>("#style-target-type");
 const styleNameEl = document.querySelector<HTMLInputElement>("#style-name");
-const styleQuoteFontEl = document.querySelector<HTMLInputElement>("#style-quote-font");
+const stylePunctuationFontEl = document.querySelector<HTMLInputElement>("#style-punctuation-font");
+const punctuationMultiselectEl = document.querySelector<HTMLDivElement>("#punctuation-multiselect");
+const punctuationMultiselectToggleBtn = document.querySelector<HTMLButtonElement>("#punctuation-multiselect-toggle");
+const punctuationMultiselectMenuEl = document.querySelector<HTMLDivElement>("#punctuation-multiselect-menu");
+const punctuationMultiselectLabelEl = document.querySelector<HTMLSpanElement>("#punctuation-multiselect-label");
+const punctuationQuoteEl = document.querySelector<HTMLInputElement>("#punctuation-quote");
+const punctuationCommaEl = document.querySelector<HTMLInputElement>("#punctuation-comma");
+const punctuationColonEl = document.querySelector<HTMLInputElement>("#punctuation-colon");
 const styleNameOptionsEl = document.querySelector<HTMLDivElement>("#style-name-options");
 const showAllStylesEl = document.querySelector<HTMLInputElement>("#show-all-styles");
 const applyStyleRangeBtn = document.querySelector<HTMLButtonElement>("#apply-style-range");
-const applyQuoteFontRangeBtn = document.querySelector<HTMLButtonElement>("#apply-quote-font-range");
+const applyPunctuationFontRangeBtn = document.querySelector<HTMLButtonElement>("#apply-punctuation-font-range");
 const splitPageFromEl = document.querySelector<HTMLInputElement>("#split-page-from");
 const splitPageToEl = document.querySelector<HTMLInputElement>("#split-page-to");
 const splitHeadingLevelEl = document.querySelector<HTMLSelectElement>("#split-heading-level");
@@ -184,6 +195,17 @@ const diffDescriptionEl = document.querySelector<HTMLParagraphElement>("#diff-de
 const diffCopyBtn = document.querySelector<HTMLButtonElement>("#diff-copy");
 const diffCancelBtn = document.querySelector<HTMLButtonElement>("#diff-cancel");
 const diffConfirmBtn = document.querySelector<HTMLButtonElement>("#diff-confirm");
+
+// ---- Paragraph Diff (005) ----
+const cwDiffText1El = document.querySelector<HTMLTextAreaElement>("#cw-diff-text1");
+const cwDiffText2El = document.querySelector<HTMLTextAreaElement>("#cw-diff-text2");
+const cwDiffCompareBtn = document.querySelector<HTMLButtonElement>("#cw-diff-compare");
+const cwDiffResultDialogEl = document.querySelector<HTMLDivElement>("#cw-diff-result-dialog");
+const cwDiffResultContentEl = document.querySelector<HTMLDivElement>("#cw-diff-result-content");
+const cwDiffResultCloseBtn = document.querySelector<HTMLButtonElement>("#cw-diff-result-close");
+const cwDiffResultCopyBtn = document.querySelector<HTMLButtonElement>("#cw-diff-result-copy");
+const cwDiffResultMergedEl = document.querySelector<HTMLDivElement>("#cw-diff-result-merged");
+let cwDiffCurrentView: "side" | "merged" = "side";
 let splitProgressSignature = "";
 let activeHelpPopoverEl: HTMLElement | null = null;
 let helpTooltipEl: HTMLDivElement | null = null;
@@ -402,10 +424,43 @@ function selectedCapabilityProfile(): CapabilityProfileId {
 }
 
 function selectedStyleTargetType(): StyleTargetType {
-  const value = String(styleTargetTypeEl?.value || "image-paragraph");
+  const value = String(styleTargetTypeEl?.value || "other-text");
   return ["image-paragraph", "image-caption", "table-text", "other-text"].includes(value)
     ? (value as StyleTargetType)
-    : "image-paragraph";
+    : "other-text";
+}
+
+function selectedPunctuationTypes(): PunctuationTargetType[] {
+  const types: PunctuationTargetType[] = [];
+  if (punctuationQuoteEl?.checked) types.push("quote");
+  if (punctuationCommaEl?.checked) types.push("comma");
+  if (punctuationColonEl?.checked) types.push("colon");
+  return types;
+}
+
+function renderPunctuationMultiselect(): void {
+  const selectedLabels: string[] = [];
+  if (punctuationQuoteEl?.checked) selectedLabels.push("引号");
+  if (punctuationCommaEl?.checked) selectedLabels.push("逗号");
+  if (punctuationColonEl?.checked) selectedLabels.push("冒号");
+  if (punctuationMultiselectLabelEl) punctuationMultiselectLabelEl.textContent = selectedLabels.length ? selectedLabels.join("、") : "请选择标点";
+  punctuationMultiselectMenuEl?.querySelectorAll<HTMLLabelElement>(".multi-select__option").forEach((option) => {
+    const checkbox = option.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    option.setAttribute("aria-selected", checkbox?.checked ? "true" : "false");
+  });
+}
+
+function setPunctuationMultiselectOpen(open: boolean): void {
+  if (punctuationMultiselectMenuEl) punctuationMultiselectMenuEl.hidden = !open;
+  if (punctuationMultiselectToggleBtn) punctuationMultiselectToggleBtn.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function setStyleApplyMode(mode: "paragraph" | "punctuation"): void {
+  const isParagraph = mode === "paragraph";
+  if (styleApplyModeEl && styleApplyModeEl.value !== mode) styleApplyModeEl.value = mode;
+  if (styleApplyParagraphPanelEl) styleApplyParagraphPanelEl.hidden = !isParagraph;
+  if (styleApplyPunctuationPanelEl) styleApplyPunctuationPanelEl.hidden = isParagraph;
+  if (isParagraph) setPunctuationMultiselectOpen(false);
 }
 
 async function getApplication(): Promise<any> {
@@ -872,6 +927,7 @@ function setBusy(isBusy: boolean): void {
     sessionBackChatBtn,
     refreshStyleOptionsBtn,
     applyStyleRangeBtn,
+    applyPunctuationFontRangeBtn,
     splitDocxByHeadingBtn,
     applyStyleNlBtn,
     inspectStyleSelectionBtn,
@@ -882,9 +938,14 @@ function setBusy(isBusy: boolean): void {
     sessionSearchEl,
     stylePageFromEl,
     stylePageToEl,
+    styleApplyModeEl,
     styleTargetTypeEl,
     styleNameEl,
-    styleQuoteFontEl,
+    stylePunctuationFontEl,
+    punctuationMultiselectToggleBtn,
+    punctuationQuoteEl,
+    punctuationCommaEl,
+    punctuationColonEl,
     showAllStylesEl,
     splitPageFromEl,
     splitPageToEl,
@@ -1217,7 +1278,7 @@ async function applyStyleRange(): Promise<void> {
   setStatus(`样式处理完成：命中 ${result.matched} 项，成功 ${result.updated} 项，跳过 ${result.skipped} 项。`, result.updated === 0);
 }
 
-async function applyQuoteFontRange(): Promise<void> {
+async function applyPunctuationFontRange(): Promise<void> {
   const pageFrom = Number(stylePageFromEl?.value || 0);
   const pageTo = Number(stylePageToEl?.value || 0);
   if (!Number.isFinite(pageFrom) || pageFrom <= 0 || !Number.isFinite(pageTo) || pageTo <= 0) {
@@ -1227,18 +1288,25 @@ async function applyQuoteFontRange(): Promise<void> {
     throw new Error("结束页码不能小于起始页码。");
   }
 
-  const fontName = String(styleQuoteFontEl?.value || "").trim();
-  if (!fontName) {
-    throw new Error("请先输入引号字体名称。");
+  const punctuationTypes = selectedPunctuationTypes();
+  if (!punctuationTypes.length) {
+    throw new Error("请至少选择一种标点。");
   }
 
+  const fontName = String(stylePunctuationFontEl?.value || "").trim();
+  if (!fontName) {
+    throw new Error("请先输入字体名称。");
+  }
+
+  setStatus("正在按页码处理标点字体，请稍候...");
   const app = await getApplication();
-  const result = await applyQuoteFontByPageRange(app, {
+  const result = await applyPunctuationFontByPageRange(app, {
     pageFrom,
     pageTo,
     fontName,
+    punctuationTypes,
   });
-  setStatus(`引号字体处理完成：命中 ${result.matched} 个引号，成功 ${result.updated} 个，跳过 ${result.skipped} 个。`, result.updated === 0);
+  setStatus(`标点字体处理完成：命中 ${result.matched} 个标点，成功 ${result.updated} 个，跳过 ${result.skipped} 个。`, result.updated === 0);
 }
 
 async function splitDocxByHeading(): Promise<void> {
@@ -1420,6 +1488,334 @@ function openDiffModal(original: string, updated: string): Promise<"confirm" | "
     diffCancelBtn.addEventListener("click", onCancel, { once: true });
     diffCopyBtn.addEventListener("click", onCopy, { once: true });
   });
+}
+
+// ---- Paragraph Diff (005) ----
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function buildSideBySideHtml(original: string, updated: string): string {
+  if (original === updated) {
+    return '<div class="cw-diff-nochange-message">未发现差异，两段文字完全相同。</div>';
+  }
+
+  const { left, right } = buildCharDiff(original, updated);
+
+  const buildParagraphHtml = (
+    segments: { op: string; text: string }[],
+    highlightOp: "remove" | "add",
+    highlightClass: string,
+  ): string => {
+    let html = '<p class="cw-diff-paragraph">';
+    for (const seg of segments) {
+      const escaped = escapeHtml(seg.text);
+      if (escaped === "") continue;
+      if (seg.op === highlightOp) {
+        html += `<span class="${highlightClass}" style="display:inline">${escaped}</span>`;
+      } else {
+        html += escaped;
+      }
+    }
+    html += "</p>";
+    return html;
+  };
+
+  return (
+    '<div class="cw-diff-column cw-diff-column--left">' +
+    '<div class="cw-diff-column__title">段落 1（原始/旧版）</div>' +
+    '<div class="cw-diff-column__body">' +
+    buildParagraphHtml(left.filter((s) => s.op !== "add"), "remove", "cw-diff-removed") +
+    "</div></div>" +
+    '<div class="cw-diff-column cw-diff-column--right">' +
+    '<div class="cw-diff-column__title">段落 2（修改/新版）</div>' +
+    '<div class="cw-diff-column__body">' +
+    buildParagraphHtml(right.filter((s) => s.op !== "remove"), "add", "cw-diff-added") +
+    "</div></div>"
+  );
+}
+
+function buildMergedHtml(original: string, updated: string): string {
+  if (original === updated) {
+    return '<div class="cw-diff-nochange-message">未发现差异，两段文字完全相同。</div>';
+  }
+
+  const segments = buildUnifiedCharDiff(original, updated);
+  let html = '<p class="cw-diff-merged-paragraph">';
+  for (const seg of segments) {
+    const escaped = escapeHtml(seg.text);
+    if (escaped === "") continue;
+    if (seg.op === "remove") {
+      html += `<span class="cw-diff-removed" style="display:inline">${escaped}</span>`;
+    } else if (seg.op === "add") {
+      html += `<span class="cw-diff-added" style="display:inline">${escaped}</span>`;
+    } else {
+      html += escaped;
+    }
+  }
+  html += "</p>";
+  return html;
+}
+
+function renderSideBySideDiff(original: string, updated: string): void {
+  if (!cwDiffResultContentEl) return;
+  cwDiffResultContentEl.innerHTML = "";
+  cwDiffResultContentEl.innerHTML = buildSideBySideHtml(original, updated);
+
+  // Also pre-render merged view
+  if (cwDiffResultMergedEl) {
+    cwDiffResultMergedEl.innerHTML = "";
+    cwDiffResultMergedEl.innerHTML = buildMergedHtml(original, updated);
+  }
+
+  // Reset view toggle
+  cwDiffCurrentView = "side";
+  updateDiffViewToggle();
+}
+
+function updateDiffViewToggle(): void {
+  const sideBtn = document.querySelector<HTMLButtonElement>('[data-cw-diff-view="side"]');
+  const mergedBtn = document.querySelector<HTMLButtonElement>('[data-cw-diff-view="merged"]');
+  if (sideBtn) sideBtn.classList.toggle("is-active", cwDiffCurrentView === "side");
+  if (mergedBtn) mergedBtn.classList.toggle("is-active", cwDiffCurrentView === "merged");
+  if (cwDiffResultContentEl) cwDiffResultContentEl.hidden = cwDiffCurrentView !== "side";
+  if (cwDiffResultMergedEl) cwDiffResultMergedEl.hidden = cwDiffCurrentView !== "merged";
+}
+
+function switchDiffView(view: "side" | "merged"): void {
+  cwDiffCurrentView = view;
+  updateDiffViewToggle();
+}
+
+function handleParagraphDiff(): void {
+  const text1 = cwDiffText1El?.value ?? "";
+  const text2 = cwDiffText2El?.value ?? "";
+
+  if (!text1.trim() && !text2.trim()) {
+    setStatus("请至少在一个输入框中输入文字后再进行比较。", true);
+    return;
+  }
+
+  if (!text1.trim() || !text2.trim()) {
+    setStatus("两个输入框都需要输入文字才能进行比较。", true);
+    return;
+  }
+
+  // --- DIAGNOSTICS: log runtime environment ---
+  console.log("[cw-diff] window.location.href:", window.location.href);
+  console.log("[cw-diff] window.self === window.top:", window.self === window.top);
+  console.log("[cw-diff] window.parent === window:", window.parent === window);
+  console.log("[cw-diff] navigator.userAgent:", navigator.userAgent);
+
+  // --- Step 1: synchronously open blank window FIRST (must be in click call chain) ---
+  let popout: Window | null = null;
+  try {
+    popout = window.open("", "_blank", "width=1200,height=800,left=100,top=80");
+  } catch (e) {
+    console.warn("[cw-diff] window.open threw:", e);
+  }
+
+  console.log("[cw-diff] window.open returned:", popout);
+  if (popout) {
+    console.log("[cw-diff] popout.closed:", popout.closed);
+    console.log("[cw-diff] popout.location:", (() => { try { return popout.location.href; } catch { return "(cross-origin)"; } })());
+  }
+
+  // --- Step 2: compute diff HTML ---
+  const sideHtml = text1 === text2
+    ? '<div style="text-align:center;padding:48px;color:#888;font-size:14px;">未发现差异，两段文字完全相同。</div>'
+    : buildSideBySideHtml(text1, text2);
+
+  const mergedHtml = text1 === text2
+    ? '<div style="text-align:center;padding:48px;color:#888;font-size:14px;">未发现差异，两段文字完全相同。</div>'
+    : buildMergedHtml(text1, text2);
+
+  // --- Step 3: write to popout OR fallback to modal ---
+  if (popout && !popout.closed) {
+    writeDiffPopoutWindow(popout, text1, text2, sideHtml, mergedHtml);
+    setStatus("已打开独立差异对比窗口。");
+    return;
+  }
+
+  // Popout failed — show in-panel modal with clear message
+  setStatus("独立窗口打开失败（可能被 WPS/Word 插件环境限制），已回退到面板内显示。", true);
+  renderSideBySideDiff(text1, text2);
+  if (cwDiffResultDialogEl) {
+    cwDiffResultDialogEl.hidden = false;
+    cwDiffResultDialogEl.setAttribute("aria-hidden", "false");
+  }
+}
+
+function writeDiffPopoutWindow(
+  w: Window,
+  original: string,
+  updated: string,
+  sideHtml: string,
+  mergedHtml: string,
+): void {
+  const copyText = JSON.stringify(
+    `=== 段落差异对比 ===
+
+--- 段落 1（原始/旧版）---
+${original}
+
+--- 段落 2（修改/新版）---
+${updated}
+
+--- 差异 ---
+${original === updated ? "未发现差异。" : "两段文字存在差异，请查看对比视图。"}`,
+  );
+
+  const doc = w.document;
+  doc.title = "段落差异对比";
+  doc.write(`<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>段落差异对比</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 14px;
+  color: #1a1a1a;
+  background: #ffffff;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+.cw-diff-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #ddd;
+  background: #fafafa;
+}
+.cw-diff-toolbar__label { font-size: 12px; color: #888; }
+.cw-diff-toolbar__btn {
+  height: 28px; padding: 0 12px;
+  border: 1px solid #ccc; border-radius: 5px;
+  background: #fff; color: #333; font-size: 12px; cursor: pointer;
+}
+.cw-diff-toolbar__btn.is-active {
+  background: #1d7f63; color: #fff; border-color: #1d7f63;
+}
+.cw-diff-toolbar__spacer { flex: 1; }
+.cw-diff-columns {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: row; overflow: hidden;
+}
+.cw-diff-column {
+  flex: 1 1 50%; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+.cw-diff-column--left { border-right: 1px solid #ddd; }
+.cw-diff-column__title {
+  flex: 0 0 auto; padding: 8px 14px;
+  font-size: 11px; font-weight: 600; color: #888;
+  border-bottom: 1px solid #ddd; background: #f8f8f8;
+}
+.cw-diff-column__body {
+  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px; background: #fcfcfc;
+}
+.cw-diff-paragraph {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  line-height: 1.85; font-size: 14px;
+}
+.cw-diff-merged {
+  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px; background: #fcfcfc;
+}
+.cw-diff-merged-paragraph {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  line-height: 1.85; font-size: 14px;
+}
+.cw-diff-added {
+  display: inline; background: #d4edda; color: #1a5c34;
+  border-radius: 2px; padding: 1px 2px;
+}
+.cw-diff-removed {
+  display: inline; background: #fde2e2; color: #9b2525;
+  text-decoration: line-through; border-radius: 2px; padding: 1px 2px;
+}
+.cw-diff-nochange-message {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; font-size: 14px; color: #888;
+}
+@media (max-width: 800px) {
+  .cw-diff-columns { flex-direction: column; }
+  .cw-diff-column--left { border-right: none; border-bottom: 1px solid #ddd; }
+}
+</style>
+</head>
+<body>
+<div class="cw-diff-toolbar">
+  <span class="cw-diff-toolbar__label">视图：</span>
+  <button class="cw-diff-toolbar__btn is-active" onclick="switchView('side')" id="btn-side">左右对比</button>
+  <button class="cw-diff-toolbar__btn" onclick="switchView('merged')" id="btn-merged">合并对比</button>
+  <span class="cw-diff-toolbar__spacer"></span>
+  <button class="cw-diff-toolbar__btn" onclick="copyResult()">复制对比结果</button>
+  <button class="cw-diff-toolbar__btn" onclick="window.close()">关闭</button>
+</div>
+<div class="cw-diff-columns" id="side-view">${sideHtml}</div>
+<div class="cw-diff-merged" id="merged-view" hidden>${mergedHtml}</div>
+<script>
+function switchView(v) {
+  document.getElementById("side-view").hidden = v !== "side";
+  document.getElementById("merged-view").hidden = v !== "merged";
+  document.getElementById("btn-side").classList.toggle("is-active", v === "side");
+  document.getElementById("btn-merged").classList.toggle("is-active", v === "merged");
+}
+function copyResult() {
+  var t = ${copyText};
+  navigator.clipboard.writeText(t).then(function() {
+    var btns = document.querySelectorAll(".cw-diff-toolbar__btn");
+    var last = btns[btns.length - 2];
+    var orig = last.textContent;
+    last.textContent = "\u5df2\u590d\u5236\uff01";
+    setTimeout(function() { last.textContent = orig; }, 1500);
+  }).catch(function() {});
+}
+<\\/script>
+</body>
+</html>`);
+  doc.close();
+}
+
+function closeParagraphDiffDialog(): void {
+  if (cwDiffResultDialogEl) {
+    cwDiffResultDialogEl.hidden = true;
+    cwDiffResultDialogEl.setAttribute("aria-hidden", "true");
+  }
+}
+
+async function copyParagraphDiffResult(): Promise<void> {
+  const text1 = cwDiffText1El?.value ?? "";
+  const text2 = cwDiffText2El?.value ?? "";
+  const result = `=== 段落差异对比 ===
+
+--- 段落 1（原始/旧版）---
+${text1}
+
+--- 段落 2（修改/新版）---
+${text2}
+
+--- 差异 ---
+${text1 === text2 ? "未发现差异。" : "两段文字存在差异，请查看并排对比视图。"}`;
+
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(result);
+    setStatus("已复制对比结果到剪贴板。");
+  } else {
+    setStatus("无法复制：剪贴板不可用。", true);
+  }
 }
 
 async function copyTextToClipboard(text: string): Promise<void> {
@@ -2199,6 +2595,15 @@ styleNameEl?.addEventListener("focus", () => {
 styleNameEl?.addEventListener("blur", () => {
   window.setTimeout(() => closeStyleSuggestions(), 120);
 });
+styleApplyModeEl?.addEventListener("change", () => {
+  setStyleApplyMode(styleApplyModeEl.value === "punctuation" ? "punctuation" : "paragraph");
+});
+punctuationMultiselectToggleBtn?.addEventListener("click", () => {
+  setPunctuationMultiselectOpen(Boolean(punctuationMultiselectMenuEl?.hidden));
+});
+[punctuationQuoteEl, punctuationCommaEl, punctuationColonEl].forEach((checkbox) => {
+  checkbox?.addEventListener("change", renderPunctuationMultiselect);
+});
 applyStyleRangeBtn?.addEventListener("click", () => {
   void (async () => {
     try {
@@ -2211,11 +2616,11 @@ applyStyleRangeBtn?.addEventListener("click", () => {
     }
   })();
 });
-applyQuoteFontRangeBtn?.addEventListener("click", () => {
+applyPunctuationFontRangeBtn?.addEventListener("click", () => {
   void (async () => {
     try {
       setBusy(true);
-      await applyQuoteFontRange();
+      await applyPunctuationFontRange();
     } catch (error) {
       setStatus((error as Error).message, true);
     } finally {
@@ -2378,6 +2783,9 @@ sessionRenameDialogEl?.addEventListener("click", (event) => {
 });
 document.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
+  if (punctuationMultiselectEl && !punctuationMultiselectEl.contains(target)) {
+    setPunctuationMultiselectOpen(false);
+  }
   if (!target.closest(".session-item__action") && !target.closest("#session-context-menu")) {
     closeSessionContextMenu();
   }
@@ -2410,6 +2818,7 @@ document.addEventListener("keydown", (event) => {
     closeSessionContextMenu();
     closeSessionRenameDialog();
     closeStylePromptEditor();
+    closeParagraphDiffDialog();
     closeSettingsPanel();
   }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && settingsPanelEl && !settingsPanelEl.hidden) {
@@ -2481,6 +2890,21 @@ closePanelBtn?.addEventListener("click", () => {
       // Ignore close failures in standalone browser mode.
     }
   })();
+});
+
+// ---- Paragraph Diff (005) event listeners ----
+cwDiffCompareBtn?.addEventListener("click", handleParagraphDiff);
+cwDiffResultCloseBtn?.addEventListener("click", closeParagraphDiffDialog);
+cwDiffResultCopyBtn?.addEventListener("click", () => {
+  void (async () => {
+    await copyParagraphDiffResult();
+  })();
+});
+cwDiffResultDialogEl?.addEventListener("click", (event) => {
+  const target = event.target as HTMLElement;
+  if (target?.dataset?.close === "1") closeParagraphDiffDialog();
+  const view = target?.dataset?.cwDiffView;
+  if (view === "side" || view === "merged") switchDiffView(view);
 });
 
 void (async () => {
