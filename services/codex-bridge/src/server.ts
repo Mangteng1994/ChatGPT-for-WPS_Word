@@ -439,8 +439,9 @@ interface DiffPopupData {
   updated: string;
 }
 
-const diffPopupStore = new Map<string, { data: DiffPopupData; expiresAt: number }>();
+const diffPopupStore = new Map<string, { data: DiffPopupData; expiresAt: number; version: number }>();
 const DIFF_POPUP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+let activeDiffPopupToken: string | null = null;
 
 function generateDiffToken(): string {
   return crypto.randomBytes(16).toString("hex");
@@ -461,7 +462,7 @@ function openSystemBrowser(url: string): void {
   }
 }
 
-function buildDiffPopupHtml(data: DiffPopupData): string {
+function buildDiffPopupHtml(data: DiffPopupData, token: string, version: number): string {
   const { defaultView, sideHtml, mergedHtml, comprehensiveHtml, copyText } = data;
   const title = "段落差异对比";
   const copyTextJson = JSON.stringify(copyText);
@@ -521,11 +522,21 @@ function buildDiffPopupHtml(data: DiffPopupData): string {
     "</main>\n" +
     "<script>\n" +
     "(function(){\n" +
+    "var TOKEN=\"" + token + "\";\n" +
+    "var CURRENT_VERSION=" + version + ";\n" +
+    "var POLL_INTERVAL=2000;\n" +
     "var defaultView=\"" + defaultView + "\";\n" +
     "function setHidden(id,h){var e=document.getElementById(id);if(e)e.hidden=h;}\n" +
     "function setActive(id,a){var e=document.getElementById(id);if(e)e.classList.toggle(\"is-active\",a);}\n" +
     "function switchView(v){if(v!==\"side\"&&v!==\"merged\"&&v!==\"comprehensive\")v=\"comprehensive\";setHidden(\"side-view\",v!==\"side\");setHidden(\"merged-view\",v!==\"merged\");setHidden(\"comprehensive-view\",v!==\"comprehensive\");setActive(\"btn-side\",v===\"side\");setActive(\"btn-merged\",v===\"merged\");setActive(\"btn-comprehensive\",v===\"comprehensive\");}\n" +
     "function copyResult(){var t=" + copyTextJson + ";if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(function(){var b=document.getElementById(\"btn-copy\");if(!b)return;var o=b.textContent;b.textContent=\"已复制！\";setTimeout(function(){b.textContent=o;},1500)}).catch(function(){})}}\n" +
+    "function pollVersion(){\n" +
+    "fetch('/diff-popup/version/'+TOKEN).then(function(r){return r.json();}).then(function(d){\n" +
+    "if(d.expired){window.location.reload();return;}\n" +
+    "if(d.version>CURRENT_VERSION){window.location.reload();}\n" +
+    "}).catch(function(){});\n" +
+    "}\n" +
+    "setInterval(pollVersion,POLL_INTERVAL);\n" +
     "document.addEventListener(\"DOMContentLoaded\",function(){\n" +
     "var btns=document.querySelectorAll(\"[data-view]\");\n" +
     "for(var i=0;i<btns.length;i+=1){btns[i].addEventListener(\"click\",function(){switchView(this.getAttribute(\"data-view\")||\"comprehensive\");});}\n" +
@@ -545,27 +556,57 @@ function handleDiffPopupOpen(body: string, res: import("node:http").ServerRespon
       return;
     }
 
-    const token = generateDiffToken();
-    diffPopupStore.set(token, {
-      data: payload,
-      expiresAt: Date.now() + DIFF_POPUP_TTL_MS,
-    });
+    // Reuse active token if still valid
+    let token = activeDiffPopupToken;
+    const existing = token ? diffPopupStore.get(token) : undefined;
 
-    const url = `http://${runtime.host}:${runtime.port}/diff-popup/${token}`;
-    openSystemBrowser(url);
+    if (existing && Date.now() <= existing.expiresAt) {
+      // Update data and bump version
+      existing.data = payload;
+      existing.version += 1;
+      existing.expiresAt = Date.now() + DIFF_POPUP_TTL_MS;
+    } else {
+      // Create new token
+      if (token) diffPopupStore.delete(token);
+      token = generateDiffToken();
+      activeDiffPopupToken = token;
+      diffPopupStore.set(token, {
+        data: payload,
+        expiresAt: Date.now() + DIFF_POPUP_TTL_MS,
+        version: 1,
+      });
 
-    sendJson(res, 200, { ok: true, url });
+      const url = `http://${runtime.host}:${runtime.port}/diff-popup/${token}`;
+      openSystemBrowser(url);
+    }
+
+    sendJson(res, 200, { ok: true, url: `http://${runtime.host}:${runtime.port}/diff-popup/${token}` });
   } catch (error) {
     sendJson(res, 500, { ok: false, error: (error as Error).message });
   }
 }
 
 function handleDiffPopupView(url: string, res: import("node:http").ServerResponse): void {
-  const token = url.replace("/diff-popup/", "").split("?")[0];
+  const path = (url || "").split("?")[0];
+  const token = path.replace("/diff-popup/", "").replace("/version/", "");
+
+  // Version polling endpoint
+  if (path.includes("/version/")) {
+    const entry = diffPopupStore.get(token);
+    if (!entry || Date.now() > entry.expiresAt) {
+      diffPopupStore.delete(token);
+      if (activeDiffPopupToken === token) activeDiffPopupToken = null;
+      sendJson(res, 200, { version: 0, expired: true });
+      return;
+    }
+    sendJson(res, 200, { version: entry.version, expired: false });
+    return;
+  }
   const entry = diffPopupStore.get(token);
 
   if (!entry || Date.now() > entry.expiresAt) {
     diffPopupStore.delete(token);
+    if (activeDiffPopupToken === token) activeDiffPopupToken = null;
     res.statusCode = 200;
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.end("<!doctype html><html><body><p style=\"text-align:center;padding:48px;color:#888\">对比数据已过期，请从 WPS 面板重新触发对比。</p></body></html>");
@@ -576,11 +617,14 @@ function handleDiffPopupView(url: string, res: import("node:http").ServerRespons
   if (Math.random() < 0.1) {
     const now = Date.now();
     for (const [k, v] of diffPopupStore) {
-      if (now > v.expiresAt) diffPopupStore.delete(k);
+      if (now > v.expiresAt) {
+        diffPopupStore.delete(k);
+        if (activeDiffPopupToken === k) activeDiffPopupToken = null;
+      }
     }
   }
 
-  const html = buildDiffPopupHtml(entry.data);
+  const html = buildDiffPopupHtml(entry.data, token, entry.version);
   res.statusCode = 200;
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store, max-age=0");
