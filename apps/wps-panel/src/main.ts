@@ -1607,44 +1607,61 @@ function handleParagraphDiff(): void {
     return;
   }
 
-  // --- DIAGNOSTICS: log runtime environment ---
-  console.log("[cw-diff] window.location.href:", window.location.href);
-  console.log("[cw-diff] window.self === window.top:", window.self === window.top);
-  console.log("[cw-diff] window.parent === window:", window.parent === window);
-  console.log("[cw-diff] navigator.userAgent:", navigator.userAgent);
-
-  // --- Step 1: synchronously open blank window FIRST (must be in click call chain) ---
-  let popout: Window | null = null;
-  try {
-    popout = window.open("", "_blank", "width=1200,height=800,left=100,top=80");
-  } catch (e) {
-    console.warn("[cw-diff] window.open threw:", e);
-  }
-
-  console.log("[cw-diff] window.open returned:", popout);
-  if (popout) {
-    console.log("[cw-diff] popout.closed:", popout.closed);
-    console.log("[cw-diff] popout.location:", (() => { try { return popout.location.href; } catch { return "(cross-origin)"; } })());
-  }
-
-  // --- Step 2: compute diff HTML ---
+  // Compute diff HTML
   const sideHtml = text1 === text2
-    ? '<div style="text-align:center;padding:48px;color:#888;font-size:14px;">未发现差异，两段文字完全相同。</div>'
+    ? '<div class="cw-diff-nochange-message">未发现差异，两段文字完全相同。</div>'
     : buildSideBySideHtml(text1, text2);
 
   const mergedHtml = text1 === text2
-    ? '<div style="text-align:center;padding:48px;color:#888;font-size:14px;">未发现差异，两段文字完全相同。</div>'
+    ? '<div class="cw-diff-nochange-message">未发现差异，两段文字完全相同。</div>'
     : buildMergedHtml(text1, text2);
 
-  // --- Step 3: write to popout OR fallback to modal ---
+  const copyText = `=== 段落差异对比 ===
+
+--- 段落 1（原始/旧版）---
+${text1}
+
+--- 段落 2（修改/新版）---
+${text2}
+
+--- 差异 ---
+${text1 === text2 ? "未发现差异。" : "两段文字存在差异，请查看对比视图。"}`;
+
+  // Strategy A: open standalone diff-popup.html via Vite dev server
+  const diffKey = "cw-diff-" + Date.now().toString(36);
+  try {
+    sessionStorage.setItem(diffKey, JSON.stringify({ sideHtml, mergedHtml, copyText, original: text1, updated: text2 }));
+  } catch {
+    // sessionStorage quota exceeded — ignore, fall through to fallback
+  }
+
+  let popout: Window | null = null;
+  try {
+    popout = window.open("/diff-popup.html#" + diffKey, "_blank", "width=1200,height=800,left=100,top=80");
+  } catch {
+    // window.open may throw in restricted environments
+  }
+
+  if (popout && !popout.closed) {
+    setStatus("已打开独立差异对比窗口。");
+    return;
+  }
+
+  // Strategy B: open blank window + document.write (fallback for older WebViews)
+  try {
+    popout = window.open("", "_blank", "width=1200,height=800,left=100,top=80");
+  } catch {
+    // ignored
+  }
+
   if (popout && !popout.closed) {
     writeDiffPopoutWindow(popout, text1, text2, sideHtml, mergedHtml);
     setStatus("已打开独立差异对比窗口。");
     return;
   }
 
-  // Popout failed — show in-panel modal with clear message
-  setStatus("独立窗口打开失败（可能被 WPS/Word 插件环境限制），已回退到面板内显示。", true);
+  // Strategy C: in-panel dialog (last resort)
+  setStatus("当前 WPS 插件环境限制，已回退到面板内显示。", true);
   renderSideBySideDiff(text1, text2);
   if (cwDiffResultDialogEl) {
     cwDiffResultDialogEl.hidden = false;
@@ -1660,132 +1677,50 @@ function writeDiffPopoutWindow(
   mergedHtml: string,
 ): void {
   const copyText = JSON.stringify(
-    `=== 段落差异对比 ===
-
---- 段落 1（原始/旧版）---
-${original}
-
---- 段落 2（修改/新版）---
-${updated}
-
---- 差异 ---
-${original === updated ? "未发现差异。" : "两段文字存在差异，请查看对比视图。"}`,
+    "=== 段落差异对比 ===\n\n--- 段落 1（原始/旧版）---\n" +
+    original + "\n\n--- 段落 2（修改/新版）---\n" +
+    updated + "\n\n--- 差异 ---\n" +
+    (original === updated ? "未发现差异。" : "两段文字存在差异，请查看对比视图。"),
   );
 
   const doc = w.document;
   doc.title = "段落差异对比";
-  doc.write(`<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>段落差异对比</title>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
-  font-size: 14px;
-  color: #1a1a1a;
-  background: #ffffff;
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  overflow: hidden;
-}
-.cw-diff-toolbar {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 16px;
-  border-bottom: 1px solid #ddd;
-  background: #fafafa;
-}
-.cw-diff-toolbar__label { font-size: 12px; color: #888; }
-.cw-diff-toolbar__btn {
-  height: 28px; padding: 0 12px;
-  border: 1px solid #ccc; border-radius: 5px;
-  background: #fff; color: #333; font-size: 12px; cursor: pointer;
-}
-.cw-diff-toolbar__btn.is-active {
-  background: #1d7f63; color: #fff; border-color: #1d7f63;
-}
-.cw-diff-toolbar__spacer { flex: 1; }
-.cw-diff-columns {
-  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: row; overflow: hidden;
-}
-.cw-diff-column {
-  flex: 1 1 50%; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
-}
-.cw-diff-column--left { border-right: 1px solid #ddd; }
-.cw-diff-column__title {
-  flex: 0 0 auto; padding: 8px 14px;
-  font-size: 11px; font-weight: 600; color: #888;
-  border-bottom: 1px solid #ddd; background: #f8f8f8;
-}
-.cw-diff-column__body {
-  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px; background: #fcfcfc;
-}
-.cw-diff-paragraph {
-  margin: 0; white-space: pre-wrap; word-break: break-word;
-  line-height: 1.85; font-size: 14px;
-}
-.cw-diff-merged {
-  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px; background: #fcfcfc;
-}
-.cw-diff-merged-paragraph {
-  margin: 0; white-space: pre-wrap; word-break: break-word;
-  line-height: 1.85; font-size: 14px;
-}
-.cw-diff-added {
-  display: inline; background: #d4edda; color: #1a5c34;
-  border-radius: 2px; padding: 1px 2px;
-}
-.cw-diff-removed {
-  display: inline; background: #fde2e2; color: #9b2525;
-  text-decoration: line-through; border-radius: 2px; padding: 1px 2px;
-}
-.cw-diff-nochange-message {
-  display: flex; align-items: center; justify-content: center;
-  height: 100%; font-size: 14px; color: #888;
-}
-@media (max-width: 800px) {
-  .cw-diff-columns { flex-direction: column; }
-  .cw-diff-column--left { border-right: none; border-bottom: 1px solid #ddd; }
-}
-</style>
-</head>
-<body>
-<div class="cw-diff-toolbar">
-  <span class="cw-diff-toolbar__label">视图：</span>
-  <button class="cw-diff-toolbar__btn is-active" onclick="switchView('side')" id="btn-side">左右对比</button>
-  <button class="cw-diff-toolbar__btn" onclick="switchView('merged')" id="btn-merged">合并对比</button>
-  <span class="cw-diff-toolbar__spacer"></span>
-  <button class="cw-diff-toolbar__btn" onclick="copyResult()">复制对比结果</button>
-  <button class="cw-diff-toolbar__btn" onclick="window.close()">关闭</button>
-</div>
-<div class="cw-diff-columns" id="side-view">${sideHtml}</div>
-<div class="cw-diff-merged" id="merged-view" hidden>${mergedHtml}</div>
-<script>
-function switchView(v) {
-  document.getElementById("side-view").hidden = v !== "side";
-  document.getElementById("merged-view").hidden = v !== "merged";
-  document.getElementById("btn-side").classList.toggle("is-active", v === "side");
-  document.getElementById("btn-merged").classList.toggle("is-active", v === "merged");
-}
-function copyResult() {
-  var t = ${copyText};
-  navigator.clipboard.writeText(t).then(function() {
-    var btns = document.querySelectorAll(".cw-diff-toolbar__btn");
-    var last = btns[btns.length - 2];
-    var orig = last.textContent;
-    last.textContent = "\u5df2\u590d\u5236\uff01";
-    setTimeout(function() { last.textContent = orig; }, 1500);
-  }).catch(function() {});
-}
-<\\/script>
-</body>
-</html>`);
+  doc.write("<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"UTF-8\">\n" +
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" +
+    "<title>段落差异对比</title>\n<style>\n" +
+    "*{box-sizing:border-box;margin:0;padding:0}\n" +
+    "body{font-family:\"Segoe UI\",\"Microsoft YaHei\",\"PingFang SC\",sans-serif;font-size:14px;color:#1a1a1a;background:#fff;display:flex;flex-direction:column;height:100vh;overflow:hidden}\n" +
+    ".cw-diff-toolbar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid #ddd;background:#fafafa}\n" +
+    ".cw-diff-toolbar__label{font-size:12px;color:#888}\n" +
+    ".cw-diff-toolbar__btn{height:28px;padding:0 12px;border:1px solid #ccc;border-radius:5px;background:#fff;color:#333;font-size:12px;cursor:pointer}\n" +
+    ".cw-diff-toolbar__btn.is-active{background:#1d7f63;color:#fff;border-color:#1d7f63}\n" +
+    ".cw-diff-toolbar__spacer{flex:1}\n" +
+    ".cw-diff-columns{flex:1 1 auto;min-height:0;display:flex;flex-direction:row;overflow:hidden}\n" +
+    ".cw-diff-column{flex:1 1 50%;min-width:0;display:flex;flex-direction:column;overflow:hidden}\n" +
+    ".cw-diff-column--left{border-right:1px solid #ddd}\n" +
+    ".cw-diff-column__title{flex:0 0 auto;padding:8px 14px;font-size:11px;font-weight:600;color:#888;border-bottom:1px solid #ddd;background:#f8f8f8}\n" +
+    ".cw-diff-column__body{flex:1 1 auto;min-height:0;overflow:auto;padding:14px;background:#fcfcfc}\n" +
+    ".cw-diff-paragraph{margin:0;white-space:pre-wrap;word-break:break-word;line-height:1.85;font-size:14px}\n" +
+    ".cw-diff-merged{flex:1 1 auto;min-height:0;overflow:auto;padding:14px;background:#fcfcfc}\n" +
+    ".cw-diff-merged-paragraph{margin:0;white-space:pre-wrap;word-break:break-word;line-height:1.85;font-size:14px}\n" +
+    ".cw-diff-added{display:inline;background:#d4edda;color:#1a5c34;border-radius:2px;padding:1px 2px}\n" +
+    ".cw-diff-removed{display:inline;background:#fde2e2;color:#9b2525;text-decoration:line-through;border-radius:2px;padding:1px 2px}\n" +
+    ".cw-diff-nochange-message{display:flex;align-items:center;justify-content:center;height:100%;font-size:14px;color:#888}\n" +
+    "@media(max-width:800px){.cw-diff-columns{flex-direction:column}.cw-diff-column--left{border-right:none;border-bottom:1px solid #ddd}}\n" +
+    "</style>\n</head>\n<body>\n" +
+    "<div class=\"cw-diff-toolbar\">" +
+    "<span class=\"cw-diff-toolbar__label\">视图：</span>" +
+    "<button class=\"cw-diff-toolbar__btn is-active\" onclick=\"switchView('side')\" id=\"btn-side\">左右对比</button>" +
+    "<button class=\"cw-diff-toolbar__btn\" onclick=\"switchView('merged')\" id=\"btn-merged\">合并对比</button>" +
+    "<span class=\"cw-diff-toolbar__spacer\"></span>" +
+    "<button class=\"cw-diff-toolbar__btn\" onclick=\"copyResult()\">复制对比结果</button>" +
+    "<button class=\"cw-diff-toolbar__btn\" onclick=\"window.close()\">关闭</button></div>\n" +
+    "<div class=\"cw-diff-columns\" id=\"side-view\">" + sideHtml + "</div>\n" +
+    "<div class=\"cw-diff-merged\" id=\"merged-view\" hidden>" + mergedHtml + "</div>\n" +
+    "<script>\n" +
+    "function switchView(v){document.getElementById(\"side-view\").hidden=v!==\"side\";document.getElementById(\"merged-view\").hidden=v!==\"merged\";document.getElementById(\"btn-side\").classList.toggle(\"is-active\",v===\"side\");document.getElementById(\"btn-merged\").classList.toggle(\"is-active\",v===\"merged\")}\n" +
+    "function copyResult(){var t=" + copyText + ";navigator.clipboard.writeText(t).then(function(){var btns=document.querySelectorAll(\".cw-diff-toolbar__btn\");var last=btns[btns.length-2];var orig=last.textContent;last.textContent=\"已复制！\";setTimeout(function(){last.textContent=orig},1500)}).catch(function(){})}\n" +
+    "<\\/script>\n</body>\n</html>");
   doc.close();
 }
 

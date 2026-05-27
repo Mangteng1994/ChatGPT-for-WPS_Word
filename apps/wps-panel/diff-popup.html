@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>段落差异对比</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-size: 14px; color: #1a1a1a; background: #ffffff;
+  display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+}
+.cw-diff-toolbar {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; border-bottom: 1px solid #ddd; background: #fafafa;
+}
+.cw-diff-toolbar__label { font-size: 12px; color: #888; }
+.cw-diff-toolbar__btn {
+  height: 28px; padding: 0 12px; border: 1px solid #ccc; border-radius: 5px;
+  background: #fff; color: #333; font-size: 12px; cursor: pointer;
+}
+.cw-diff-toolbar__btn.is-active { background: #1d7f63; color: #fff; border-color: #1d7f63; }
+.cw-diff-toolbar__spacer { flex: 1; }
+.cw-diff-columns {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: row; overflow: hidden;
+}
+.cw-diff-column {
+  flex: 1 1 50%; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+.cw-diff-column--left { border-right: 1px solid #ddd; }
+.cw-diff-column__title {
+  flex: 0 0 auto; padding: 8px 14px; font-size: 11px; font-weight: 600; color: #888;
+  border-bottom: 1px solid #ddd; background: #f8f8f8;
+}
+.cw-diff-column__body {
+  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px; background: #fcfcfc;
+}
+.cw-diff-paragraph {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  line-height: 1.85; font-size: 14px;
+}
+.cw-diff-merged {
+  flex: 1 1 auto; min-height: 0; overflow: auto; padding: 14px; background: #fcfcfc;
+}
+.cw-diff-merged-paragraph {
+  margin: 0; white-space: pre-wrap; word-break: break-word;
+  line-height: 1.85; font-size: 14px;
+}
+.cw-diff-added {
+  display: inline; background: #d4edda; color: #1a5c34;
+  border-radius: 2px; padding: 1px 2px;
+}
+.cw-diff-removed {
+  display: inline; background: #fde2e2; color: #9b2525;
+  text-decoration: line-through; border-radius: 2px; padding: 1px 2px;
+}
+.cw-diff-nochange-message {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; font-size: 14px; color: #888;
+}
+@media (max-width: 800px) {
+  .cw-diff-columns { flex-direction: column; }
+  .cw-diff-column--left { border-right: none; border-bottom: 1px solid #ddd; }
+}
+</style>
+</head>
+<body>
+<div class="cw-diff-toolbar">
+  <span class="cw-diff-toolbar__label">视图：</span>
+  <button class="cw-diff-toolbar__btn is-active" onclick="switchView('side')" id="btn-side">左右对比</button>
+  <button class="cw-diff-toolbar__btn" onclick="switchView('merged')" id="btn-merged">合并对比</button>
+  <span class="cw-diff-toolbar__spacer"></span>
+  <button class="cw-diff-toolbar__btn" onclick="copyResult()">复制对比结果</button>
+  <button class="cw-diff-toolbar__btn" onclick="window.close()">关闭</button>
+</div>
+<div class="cw-diff-columns" id="side-view"></div>
+<div class="cw-diff-merged" id="merged-view" hidden></div>
+<script>
+(function() {
+  var key = window.location.hash.slice(1);
+  if (!key) {
+    document.getElementById("side-view").innerHTML = '<div class="cw-diff-nochange-message">缺少对比数据，请从面板重新触发对比。</div>';
+    return;
+  }
+  var raw = sessionStorage.getItem(key);
+  if (!raw) {
+    document.getElementById("side-view").innerHTML = '<div class="cw-diff-nochange-message">对比数据已过期，请从面板重新触发对比。</div>';
+    return;
+  }
+  sessionStorage.removeItem(key);
+  var data;
+  try { data = JSON.parse(raw); } catch(e) {
+    document.getElementById("side-view").innerHTML = '<div class="cw-diff-nochange-message">对比数据解析失败。</div>';
+    return;
+  }
+  document.getElementById("side-view").innerHTML = data.sideHtml;
+  document.getElementById("merged-view").innerHTML = data.mergedHtml;
+
+  window._copyText = data.copyText;
+  window._original = data.original;
+  window._updated = data.updated;
+})();
+
+function switchView(v) {
+  document.getElementById("side-view").hidden = v !== "side";
+  document.getElementById("merged-view").hidden = v !== "merged";
+  document.getElementById("btn-side").classList.toggle("is-active", v === "side");
+  document.getElementById("btn-merged").classList.toggle("is-active", v === "merged");
+}
+
+function copyResult() {
+  var text = window._copyText;
+  if (!text && window._original !== undefined) {
+    text = "\u0008=== \u6bb5\u843d\u5dee\u5f02\u5bf9\u6bd4 ===\n\n--- \u6bb5\u843d 1\uff08\u539f\u59cb/\u65e7\u7248\uff09---\n" +
+      window._original + "\n\n--- \u6bb5\u843d 2\uff08\u4fee\u6539/\u65b0\u7248\uff09---\n" +
+      window._updated + "\n\n--- \u5dee\u5f02 ---\n" +
+      (window._original === window._updated ? "\u672a\u53d1\u73b0\u5dee\u5f02\u3002" : "\u4e24\u6bb5\u6587\u5b57\u5b58\u5728\u5dee\u5f02\uff0c\u8bf7\u67e5\u770b\u5bf9\u6bd4\u89c6\u56fe\u3002");
+  }
+  navigator.clipboard.writeText(text || "").then(function() {
+    var btns = document.querySelectorAll(".cw-diff-toolbar__btn");
+    var last = btns[btns.length - 2];
+    var orig = last.textContent;
+    last.textContent = "\u5df2\u590d\u5236\uff01";
+    setTimeout(function() { last.textContent = orig; }, 1500);
+  }).catch(function() {});
+}
+</script>
+</body>
+</html>

@@ -156,62 +156,155 @@ export function hasCharDiff(original: string, updated: string): boolean {
  * Build unified/merged diff segments: interleaves removed and added text
  * into a single stream suitable for an inline diff paragraph.
  */
+
+
+/**
+ * Myers diff algorithm: finds the shortest edit script between two sequences.
+ * Produces character-level operations suitable for inline review diffs.
+ */
+function myersCharDiff(
+  a: string[],
+  b: string[],
+): { op: "equal" | "remove" | "add"; ch: string }[] {
+  const N = a.length;
+  const M = b.length;
+  const MAX = N + M;
+
+  if (N === 0) return b.map((ch) => ({ op: "add" as const, ch }));
+  if (M === 0) return a.map((ch) => ({ op: "remove" as const, ch }));
+
+  // trace[d] = array where trace[d][MAX + k] = furthest x on diagonal k at depth d
+  const trace: number[][] = [];
+
+  // Depth 0: follow the initial diagonal
+  const V0 = new Array(2 * MAX + 1).fill(-1);
+  let x = 0;
+  let y = 0;
+  while (x < N && y < M && a[x] === b[y]) { x++; y++; }
+  V0[MAX + 0] = x;
+  trace.push(V0);
+
+  if (x >= N && y >= M) {
+    return a.map((ch) => ({ op: "equal" as const, ch }));
+  }
+
+  for (let d = 1; d <= MAX; d++) {
+    const prevV = trace[d - 1];
+    const V = new Array(2 * MAX + 1).fill(-1);
+
+    for (let k = -d; k <= d; k += 2) {
+      // Decide whether to go down (from k+1) or right (from k-1)
+      const goDown = k === -d || (k !== d && prevV[MAX + k - 1] < prevV[MAX + k + 1]);
+
+      if (goDown) {
+        x = prevV[MAX + k + 1];       // coming from diagonal k+1 (move down)
+      } else {
+        x = prevV[MAX + k - 1] + 1;   // coming from diagonal k-1 (move right)
+      }
+      y = x - k;
+
+      // Follow the snake (diagonal moves for matching characters)
+      while (x < N && y < M && a[x] === b[y]) { x++; y++; }
+
+      V[MAX + k] = x;
+
+      if (x >= N && y >= M) {
+        // Found the shortest path — backtrack
+        trace.push(V);
+        return backtrackMyers(trace, a, b, d, k, MAX);
+      }
+    }
+
+    trace.push(V);
+  }
+
+  return [];
+}
+
+function backtrackMyers(
+  trace: number[][],
+  a: string[],
+  b: string[],
+  d: number,
+  k: number,
+  MAX: number,
+): { op: "equal" | "remove" | "add"; ch: string }[] {
+  const ops: { op: "equal" | "remove" | "add"; ch: string }[] = [];
+  let x = a.length;
+  let y = b.length;
+
+  for (let depth = d; depth >= 0; depth--) {
+    const V = trace[depth];
+    const prevK = (() => {
+      if (depth === 0) return 0;
+      const prevV = trace[depth - 1];
+      const goDown = k === -depth || (k !== depth && prevV[MAX + k - 1] < prevV[MAX + k + 1]);
+      return goDown ? k + 1 : k - 1;
+    })();
+
+    const prevX = depth === 0 ? 0 : trace[depth - 1][MAX + prevK];
+    const prevY = prevX - prevK;
+
+    if (depth > 0) {
+      if (prevK < k) {
+        // Moved RIGHT (prevK=k-1, diagonal increased): deleted a[prevX]
+        // Snake starts at (prevX+1, prevY), ends at (x, y)
+        while (x > prevX + 1 && y > prevY) {
+          x--; y--;
+          ops.unshift({ op: "equal", ch: a[x] });
+        }
+        ops.unshift({ op: "remove", ch: a[prevX] });
+      } else {
+        // Moved DOWN (prevK=k+1, diagonal decreased): inserted b[prevY]
+        // Snake starts at (prevX, prevY+1), ends at (x, y)
+        while (x > prevX && y > prevY + 1) {
+          x--; y--;
+          ops.unshift({ op: "equal", ch: a[x] });
+        }
+        ops.unshift({ op: "add", ch: b[prevY] });
+      }
+    } else {
+      // Depth 0: just the initial diagonal snake
+      while (x > 0 && y > 0) {
+        x--; y--;
+        ops.unshift({ op: "equal", ch: a[x] });
+      }
+    }
+
+    x = prevX;
+    y = prevY;
+    k = prevK;
+  }
+
+  return ops;
+}
+
+
+
+/**
+ * Build unified/merged diff segments using Myers diff algorithm.
+ * Produces an inline review diff: deletions at original positions, insertions where text was added.
+ */
 export function buildUnifiedCharDiff(
   original: string,
   updated: string,
 ): UnifiedDiffSegment[] {
-  const { left, right } = buildCharDiff(original, updated);
+  const a = [...original];
+  const b = [...updated];
+  const ops = myersCharDiff(a, b);
 
-  // Reconstruct the raw character alignment from merged segments
-  const leftRaw: { op: "equal" | "remove"; ch: string }[] = [];
-  const rightRaw: { op: "equal" | "add"; ch: string }[] = [];
-
-  for (const seg of left) {
-    for (const ch of seg.text) {
-      leftRaw.push({ op: seg.op as "equal" | "remove", ch });
-    }
-  }
-  for (const seg of right) {
-    for (const ch of seg.text) {
-      rightRaw.push({ op: seg.op as "equal" | "add", ch });
-    }
-  }
-
-  // Pad shorter array with empty placeholders
-  const maxLen = Math.max(leftRaw.length, rightRaw.length);
-  while (leftRaw.length < maxLen) leftRaw.push({ op: "remove", ch: "" });
-  while (rightRaw.length < maxLen) rightRaw.push({ op: "add", ch: "" });
-
-  // Walk both arrays and produce unified segments
-  const raw: { op: string; ch: string }[] = [];
-  for (let i = 0; i < maxLen; i++) {
-    const l = leftRaw[i];
-    const r = rightRaw[i];
-    if (l.op === "equal" && r.op === "equal" && l.ch === r.ch) {
-      raw.push({ op: "equal", ch: l.ch });
-    } else if (l.ch && r.ch) {
-      // Both sides have text — treat as modified (remove old, add new)
-      raw.push({ op: "remove", ch: l.ch });
-      raw.push({ op: "add", ch: r.ch });
-    } else if (l.ch) {
-      raw.push({ op: "remove", ch: l.ch });
-    } else if (r.ch) {
-      raw.push({ op: "add", ch: r.ch });
-    }
-  }
-
-  // Merge consecutive same-op segments
-  const result: UnifiedDiffSegment[] = [];
-  for (const item of raw) {
-    const last = result[result.length - 1];
+  // Merge consecutive segments with the same operation
+  const segments: UnifiedDiffSegment[] = [];
+  for (const item of ops) {
+    const last = segments[segments.length - 1];
     if (last && last.op === item.op) {
       last.text += item.ch;
     } else {
-      result.push({ op: item.op as UnifiedDiffSegment["op"], text: item.ch });
+      segments.push({ op: item.op, text: item.ch });
     }
   }
 
-  return result;
+  return segments;
 }
 
 export interface UnifiedDiffSegment {
