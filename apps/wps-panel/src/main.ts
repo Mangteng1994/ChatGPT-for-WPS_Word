@@ -1708,7 +1708,7 @@ function writeDiffPopoutWindow(
   mergedViewHtml: string,
   comprehensiveHtml: string,
 ): void {
-  const copyText = JSON.stringify(
+  const copyTextJson = JSON.stringify(
     "=== 段落差异对比 ===\n\n--- 段落 1（原始/旧版）---\n" +
     original + "\n\n--- 段落 2（修改/新版）---\n" +
     updated + "\n\n--- 差异 ---\n" +
@@ -1752,21 +1752,32 @@ function writeDiffPopoutWindow(
     "</style>\n</head>\n<body>\n" +
     "<div class=\"cw-diff-toolbar\">" +
     "<span class=\"cw-diff-toolbar__label\">视图：</span>" +
-    "<button class=\"cw-diff-toolbar__btn\" onclick=\"switchView('side')\" id=\"btn-side\">左右视图</button>" +
-    "<button class=\"cw-diff-toolbar__btn\" onclick=\"switchView('merged')\" id=\"btn-merged\">合并视图</button>" +
-    "<button class=\"cw-diff-toolbar__btn is-active\" onclick=\"switchView('comprehensive')\" id=\"btn-comprehensive\">综合视图</button>" +
+    "<button class=\"cw-diff-toolbar__btn\" data-view=\"side\" id=\"btn-side\" type=\"button\">左右视图</button>" +
+    "<button class=\"cw-diff-toolbar__btn\" data-view=\"merged\" id=\"btn-merged\" type=\"button\">合并视图</button>" +
+    "<button class=\"cw-diff-toolbar__btn is-active\" data-view=\"comprehensive\" id=\"btn-comprehensive\" type=\"button\">综合视图</button>" +
     "<span class=\"cw-diff-toolbar__spacer\"></span>" +
-    "<button class=\"cw-diff-toolbar__btn\" onclick=\"copyResult()\">复制对比结果</button>" +
-    "<button class=\"cw-diff-toolbar__btn\" onclick=\"window.close()\">关闭</button></div>\n" +
+    "<button class=\"cw-diff-toolbar__btn\" id=\"btn-copy\" type=\"button\">复制对比结果</button>" +
+    "<button class=\"cw-diff-toolbar__btn\" id=\"btn-close\" type=\"button\">关闭</button></div>\n" +
     "<main class=\"cw-diff-main\">\n" +
     "<div id=\"side-view\" class=\"cw-diff-view cw-diff-view--side\" hidden>" + sideViewHtml + "</div>\n" +
     "<div id=\"merged-view\" class=\"cw-diff-view cw-diff-view--merged\" hidden>" + mergedViewHtml + "</div>\n" +
     "<div id=\"comprehensive-view\" class=\"cw-diff-view cw-diff-view--comprehensive\">" + comprehensiveHtml + "</div>\n" +
     "</main>\n" +
     "<script>\n" +
-    "function switchView(v){document.getElementById(\"side-view\").hidden=v!==\"side\";document.getElementById(\"merged-view\").hidden=v!==\"merged\";document.getElementById(\"comprehensive-view\").hidden=v!==\"comprehensive\";document.getElementById(\"btn-side\").classList.toggle(\"is-active\",v===\"side\");document.getElementById(\"btn-merged\").classList.toggle(\"is-active\",v===\"merged\");document.getElementById(\"btn-comprehensive\").classList.toggle(\"is-active\",v===\"comprehensive\")}\n" +
-    "function copyResult(){var t=" + copyText + ";navigator.clipboard.writeText(t).then(function(){var btns=document.querySelectorAll(\".cw-diff-toolbar__btn\");var last=btns[btns.length-2];var orig=last.textContent;last.textContent=\"已复制！\";setTimeout(function(){last.textContent=orig},1500)}).catch(function(){})}\n" +
-    "<\/script>\n</body>\n</html>");
+    "(function(){\n" +
+    "function setHidden(id,h){var e=document.getElementById(id);if(e)e.hidden=h;}\n" +
+    "function setActive(id,a){var e=document.getElementById(id);if(e)e.classList.toggle(\"is-active\",a);}\n" +
+    "function switchView(v){if(v!==\"side\"&&v!==\"merged\"&&v!==\"comprehensive\")v=\"comprehensive\";setHidden(\"side-view\",v!==\"side\");setHidden(\"merged-view\",v!==\"merged\");setHidden(\"comprehensive-view\",v!==\"comprehensive\");setActive(\"btn-side\",v===\"side\");setActive(\"btn-merged\",v===\"merged\");setActive(\"btn-comprehensive\",v===\"comprehensive\");}\n" +
+    "function copyResult(){var t=" + copyTextJson + ";if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(t).then(function(){var b=document.getElementById(\"btn-copy\");if(!b)return;var o=b.textContent;b.textContent=\"已复制！\";setTimeout(function(){b.textContent=o;},1500)}).catch(function(){})}}\n" +
+    "document.addEventListener(\"DOMContentLoaded\",function(){\n" +
+    "var btns=document.querySelectorAll(\"[data-view]\");\n" +
+    "for(var i=0;i<btns.length;i+=1){btns[i].addEventListener(\"click\",function(){switchView(this.getAttribute(\"data-view\")||\"comprehensive\");});}\n" +
+    "var cb=document.getElementById(\"btn-copy\");if(cb)cb.addEventListener(\"click\",copyResult);\n" +
+    "var cl=document.getElementById(\"btn-close\");if(cl)cl.addEventListener(\"click\",function(){window.close();});\n" +
+    "switchView(\"comprehensive\");\n" +
+    "});\n" +
+    "})();\n" +
+    "</script>\n</body>\n</html>");
   doc.close();
 }
 
@@ -2885,7 +2896,7 @@ cwDiffResultDialogEl?.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
   if (target?.dataset?.close === "1") closeParagraphDiffDialog();
   const view = target?.dataset?.cwDiffView;
-  if (view === "side" || view === "merged") switchDiffView(view);
+  if (view === "side" || view === "merged" || view === "comprehensive") switchDiffView(view);
 });
 
 void (async () => {
