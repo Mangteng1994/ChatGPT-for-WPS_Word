@@ -3,6 +3,7 @@ import {
   createIllustration,
   getBridgeConfig,
   getCodexModels,
+  openDiffPopupExternal,
   runByBridgeStream,
   saveBridgeConfig,
   uploadFileAsset,
@@ -200,6 +201,7 @@ const diffConfirmBtn = document.querySelector<HTMLButtonElement>("#diff-confirm"
 const cwDiffText1El = document.querySelector<HTMLTextAreaElement>("#cw-diff-text1");
 const cwDiffText2El = document.querySelector<HTMLTextAreaElement>("#cw-diff-text2");
 const cwDiffCompareBtn = document.querySelector<HTMLButtonElement>("#cw-diff-compare");
+const cwDiffCompareMergedBtn = document.querySelector<HTMLButtonElement>("#cw-diff-compare-merged");
 const cwDiffResultDialogEl = document.querySelector<HTMLDivElement>("#cw-diff-result-dialog");
 const cwDiffResultContentEl = document.querySelector<HTMLDivElement>("#cw-diff-result-content");
 const cwDiffResultCloseBtn = document.querySelector<HTMLButtonElement>("#cw-diff-result-close");
@@ -1593,7 +1595,7 @@ function switchDiffView(view: "side" | "merged"): void {
   updateDiffViewToggle();
 }
 
-function handleParagraphDiff(): void {
+function handleParagraphDiff(viewMode: "side" | "merged"): void {
   const text1 = cwDiffText1El?.value ?? "";
   const text2 = cwDiffText2El?.value ?? "";
 
@@ -1616,57 +1618,123 @@ function handleParagraphDiff(): void {
     ? '<div class="cw-diff-nochange-message">未发现差异，两段文字完全相同。</div>'
     : buildMergedHtml(text1, text2);
 
-  const copyText = `=== 段落差异对比 ===
+  const copyText = "=== 段落差异对比 ===\n\n--- 段落 1（原始/旧版）---\n" +
+    text1 + "\n\n--- 段落 2（修改/新版）---\n" +
+    text2 + "\n\n--- 差异 ---\n" +
+    (text1 === text2 ? "未发现差异。" : "两段文字存在差异，请查看对比视图。");
 
---- 段落 1（原始/旧版）---
-${text1}
+  const isMerged = viewMode === "merged";
 
---- 段落 2（修改/新版）---
-${text2}
+  // Strategy A: open system browser via bridge
+  openDiffPopupExternal({
+    viewMode,
+    sideHtml,
+    mergedHtml,
+    copyText,
+    original: text1,
+    updated: text2,
+  }).then((resp) => {
+    if (resp.ok) {
+      setStatus(isMerged
+        ? "已在系统浏览器打开合并差异对比窗口。"
+        : "已在系统浏览器打开左右差异对比窗口。");
+      return;
+    }
+    throw new Error(resp.error || "bridge returned ok=false");
+  }).catch(() => {
+    // Strategy B: window.open fallback
+    let popout: Window | null = null;
+    try {
+      popout = window.open("", "_blank", "width=1200,height=800,left=100,top=80");
+    } catch {
+      // ignored
+    }
 
---- 差异 ---
-${text1 === text2 ? "未发现差异。" : "两段文字存在差异，请查看对比视图。"}`;
+    if (popout && !popout.closed) {
+      if (isMerged) {
+        writeDiffPopoutMergedWindow(popout, text1, text2, mergedHtml, copyText);
+      } else {
+        writeDiffPopoutWindow(popout, text1, text2, sideHtml, mergedHtml);
+      }
+      setStatus(isMerged
+        ? "已打开合并差异对比窗口（WebView 内）。"
+        : "已打开左右差异对比窗口（WebView 内）。");
+      return;
+    }
 
-  // Strategy A: open standalone diff-popup.html via Vite dev server
-  const diffKey = "cw-diff-" + Date.now().toString(36);
-  try {
-    sessionStorage.setItem(diffKey, JSON.stringify({ sideHtml, mergedHtml, copyText, original: text1, updated: text2 }));
-  } catch {
-    // sessionStorage quota exceeded — ignore, fall through to fallback
+    // Strategy C: in-panel dialog (last resort)
+    setStatus("当前 WPS 插件环境限制，且本地 bridge 未能打开外部窗口，已回退到面板内显示。", true);
+
+    if (isMerged) {
+      if (cwDiffResultMergedEl) {
+        cwDiffResultMergedEl.innerHTML = mergedHtml;
+        cwDiffResultMergedEl.hidden = false;
+      }
+      if (cwDiffResultContentEl) cwDiffResultContentEl.hidden = true;
+      cwDiffCurrentView = "merged";
+      updateDiffViewToggleForFallback(true);
+    } else {
+      renderSideBySideDiff(text1, text2);
+    }
+
+    if (cwDiffResultDialogEl) {
+      cwDiffResultDialogEl.hidden = false;
+      cwDiffResultDialogEl.setAttribute("aria-hidden", "false");
+    }
+  });
+}
+
+function updateDiffViewToggleForFallback(mergedOnly: boolean): void {
+  const sideBtn = document.querySelector<HTMLButtonElement>('[data-cw-diff-view="side"]');
+  const mergedBtn = document.querySelector<HTMLButtonElement>('[data-cw-diff-view="merged"]');
+  if (mergedOnly) {
+    if (sideBtn) sideBtn.style.display = "none";
+    if (mergedBtn) { mergedBtn.classList.add("is-active"); mergedBtn.style.display = ""; }
+  } else {
+    if (sideBtn) sideBtn.style.display = "";
+    if (mergedBtn) mergedBtn.style.display = "";
+    if (sideBtn) sideBtn.classList.toggle("is-active", cwDiffCurrentView === "side");
+    if (mergedBtn) mergedBtn.classList.toggle("is-active", cwDiffCurrentView === "merged");
   }
+  if (cwDiffResultContentEl) cwDiffResultContentEl.hidden = cwDiffCurrentView !== "side";
+  if (cwDiffResultMergedEl) cwDiffResultMergedEl.hidden = cwDiffCurrentView !== "merged";
+}
 
-  let popout: Window | null = null;
-  try {
-    popout = window.open("/diff-popup.html#" + diffKey, "_blank", "width=1200,height=800,left=100,top=80");
-  } catch {
-    // window.open may throw in restricted environments
-  }
-
-  if (popout && !popout.closed) {
-    setStatus("已打开独立差异对比窗口。");
-    return;
-  }
-
-  // Strategy B: open blank window + document.write (fallback for older WebViews)
-  try {
-    popout = window.open("", "_blank", "width=1200,height=800,left=100,top=80");
-  } catch {
-    // ignored
-  }
-
-  if (popout && !popout.closed) {
-    writeDiffPopoutWindow(popout, text1, text2, sideHtml, mergedHtml);
-    setStatus("已打开独立差异对比窗口。");
-    return;
-  }
-
-  // Strategy C: in-panel dialog (last resort)
-  setStatus("当前 WPS 插件环境限制，已回退到面板内显示。", true);
-  renderSideBySideDiff(text1, text2);
-  if (cwDiffResultDialogEl) {
-    cwDiffResultDialogEl.hidden = false;
-    cwDiffResultDialogEl.setAttribute("aria-hidden", "false");
-  }
+function writeDiffPopoutMergedWindow(
+  w: Window,
+  original: string,
+  updated: string,
+  mergedHtml: string,
+  copyText: string,
+): void {
+  const copyTextJson = JSON.stringify(copyText);
+  const doc = w.document;
+  doc.title = "段落合并对比";
+  doc.write("<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"UTF-8\">\n" +
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" +
+    "<title>段落合并对比</title>\n<style>\n" +
+    "*{box-sizing:border-box;margin:0;padding:0}\n" +
+    "body{font-family:\"Segoe UI\",\"Microsoft YaHei\",\"PingFang SC\",sans-serif;font-size:14px;color:#1a1a1a;background:#fff;display:flex;flex-direction:column;height:100vh;overflow:hidden}\n" +
+    ".cw-diff-toolbar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid #ddd;background:#fafafa}\n" +
+    ".cw-diff-toolbar__label{font-size:12px;color:#888}\n" +
+    ".cw-diff-toolbar__btn{height:28px;padding:0 12px;border:1px solid #ccc;border-radius:5px;background:#fff;color:#333;font-size:12px;cursor:pointer}\n" +
+    ".cw-diff-toolbar__spacer{flex:1}\n" +
+    ".cw-diff-merged{flex:1 1 auto;min-height:0;overflow:auto;padding:14px;background:#fcfcfc}\n" +
+    ".cw-diff-merged-paragraph{margin:0;white-space:pre-wrap;word-break:break-word;line-height:1.85;font-size:14px}\n" +
+    ".cw-diff-added{display:inline;background:#d4edda;color:#1a5c34;border-radius:2px;padding:1px 2px}\n" +
+    ".cw-diff-removed{display:inline;background:#fde2e2;color:#9b2525;text-decoration:line-through;border-radius:2px;padding:1px 2px}\n" +
+    ".cw-diff-nochange-message{display:flex;align-items:center;justify-content:center;height:100%;font-size:14px;color:#888}\n" +
+    "</style>\n</head>\n<body>\n" +
+    "<div class=\"cw-diff-toolbar\">" +
+    "<span class=\"cw-diff-toolbar__label\">合并对比</span>" +
+    "<span class=\"cw-diff-toolbar__spacer\"></span>" +
+    "<button class=\"cw-diff-toolbar__btn\" onclick=\"copyResult()\">复制对比结果</button>" +
+    "<button class=\"cw-diff-toolbar__btn\" onclick=\"window.close()\">关闭</button></div>\n" +
+    "<div class=\"cw-diff-merged\" id=\"merged-view\">" + mergedHtml + "</div>\n" +
+    "<script>\n" +
+    "function copyResult(){var t=" + copyTextJson + ";navigator.clipboard.writeText(t).then(function(){var btns=document.querySelectorAll(\".cw-diff-toolbar__btn\");var last=btns[btns.length-2];var orig=last.textContent;last.textContent=\"已复制！\";setTimeout(function(){last.textContent=orig},1500)}).catch(function(){})}\n" +
+    "<\\/script>\n</body>\n</html>");
+  doc.close();
 }
 
 function writeDiffPopoutWindow(
@@ -2828,7 +2896,8 @@ closePanelBtn?.addEventListener("click", () => {
 });
 
 // ---- Paragraph Diff (005) event listeners ----
-cwDiffCompareBtn?.addEventListener("click", handleParagraphDiff);
+cwDiffCompareBtn?.addEventListener("click", () => handleParagraphDiff("side"));
+cwDiffCompareMergedBtn?.addEventListener("click", () => handleParagraphDiff("merged"));
 cwDiffResultCloseBtn?.addEventListener("click", closeParagraphDiffDialog);
 cwDiffResultCopyBtn?.addEventListener("click", () => {
   void (async () => {

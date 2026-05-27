@@ -194,3 +194,27 @@ export async function uploadFileAsset(payload: FileUploadRequest): Promise<FileU
     body: JSON.stringify(payload),
   });
 }
+
+
+export interface DiffPopupOpenRequest {
+  viewMode: "side" | "merged";
+  sideHtml: string;
+  mergedHtml: string;
+  copyText: string;
+  original: string;
+  updated: string;
+}
+
+export interface DiffPopupOpenResponse {
+  ok: boolean;
+  url?: string;
+  error?: string;
+}
+
+export async function openDiffPopupExternal(payload: DiffPopupOpenRequest): Promise<DiffPopupOpenResponse> {
+  return requestJson<DiffPopupOpenResponse>("/diff-popup/open", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}

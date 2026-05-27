@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { runCodex, runCodexStream } from "./codex-runner";
@@ -425,6 +426,143 @@ function handleRunStream(
     });
 }
 
+
+// ---- Diff Popup ----
+
+interface DiffPopupData {
+  viewMode: "side" | "merged";
+  sideHtml: string;
+  mergedHtml: string;
+  copyText: string;
+  original: string;
+  updated: string;
+}
+
+const diffPopupStore = new Map<string, { data: DiffPopupData; expiresAt: number }>();
+const DIFF_POPUP_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+function generateDiffToken(): string {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+function openSystemBrowser(url: string): void {
+  if (process.platform === "win32") {
+    execFile(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", "Start-Process", url],
+      { windowsHide: true },
+      (err) => { if (err) console.error("[diff-popup] Failed to open browser:", err.message); },
+    );
+  } else if (process.platform === "darwin") {
+    execFile("open", [url]);
+  } else {
+    execFile("xdg-open", [url]);
+  }
+}
+
+function buildDiffPopupHtml(data: DiffPopupData): string {
+  const { viewMode, sideHtml, mergedHtml, copyText, original, updated } = data;
+  const isMerged = viewMode === "merged";
+  const title = isMerged ? "段落合并对比" : "段落差异对比";
+  const copyTextJson = JSON.stringify(copyText);
+
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${title}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;font-size:14px;color:#1a1a1a;background:#fff;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.cw-diff-toolbar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid #ddd;background:#fafafa}
+.cw-diff-toolbar__label{font-size:12px;color:#888}
+.cw-diff-toolbar__btn{height:28px;padding:0 12px;border:1px solid #ccc;border-radius:5px;background:#fff;color:#333;font-size:12px;cursor:pointer}
+.cw-diff-toolbar__btn.is-active{background:#1d7f63;color:#fff;border-color:#1d7f63}
+.cw-diff-toolbar__spacer{flex:1}
+.cw-diff-columns{flex:1 1 auto;min-height:0;display:flex;flex-direction:row;overflow:hidden}
+.cw-diff-column{flex:1 1 50%;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+.cw-diff-column--left{border-right:1px solid #ddd}
+.cw-diff-column__title{flex:0 0 auto;padding:8px 14px;font-size:11px;font-weight:600;color:#888;border-bottom:1px solid #ddd;background:#f8f8f8}
+.cw-diff-column__body{flex:1 1 auto;min-height:0;overflow:auto;padding:14px;background:#fcfcfc}
+.cw-diff-paragraph{margin:0;white-space:pre-wrap;word-break:break-word;line-height:1.85;font-size:14px}
+.cw-diff-merged{flex:1 1 auto;min-height:0;overflow:auto;padding:14px;background:#fcfcfc}
+.cw-diff-merged-paragraph{margin:0;white-space:pre-wrap;word-break:break-word;line-height:1.85;font-size:14px}
+.cw-diff-added{display:inline;background:#d4edda;color:#1a5c34;border-radius:2px;padding:1px 2px}
+.cw-diff-removed{display:inline;background:#fde2e2;color:#9b2525;text-decoration:line-through;border-radius:2px;padding:1px 2px}
+.cw-diff-nochange-message{display:flex;align-items:center;justify-content:center;height:100%;font-size:14px;color:#888}
+@media(max-width:800px){.cw-diff-columns{flex-direction:column}.cw-diff-column--left{border-right:none;border-bottom:1px solid #ddd}}
+</style>
+</head>
+<body>
+<div class="cw-diff-toolbar">
+  <span class="cw-diff-toolbar__label">${isMerged ? "合并对比" : "视图："}</span>
+  ${isMerged ? "" : '<button class="cw-diff-toolbar__btn is-active" onclick="switchView(\'side\')" id="btn-side">左右对比</button><button class="cw-diff-toolbar__btn" onclick="switchView(\'merged\')" id="btn-merged">合并对比</button>'}
+  <span class="cw-diff-toolbar__spacer"></span>
+  <button class="cw-diff-toolbar__btn" onclick="copyResult()">复制对比结果</button>
+  <button class="cw-diff-toolbar__btn" onclick="window.close()">关闭</button>
+</div>
+${isMerged
+  ? '<div class="cw-diff-merged" id="merged-view">' + mergedHtml + '</div>'
+  : '<div class="cw-diff-columns" id="side-view">' + sideHtml + '</div><div class="cw-diff-merged" id="merged-view" hidden>' + mergedHtml + '</div>'}
+<script>
+${isMerged ? "" : 'function switchView(v){document.getElementById("side-view").hidden=v!=="side";document.getElementById("merged-view").hidden=v!=="merged";document.getElementById("btn-side").classList.toggle("is-active",v==="side");document.getElementById("btn-merged").classList.toggle("is-active",v==="merged")}'}
+function copyResult(){var t=${copyTextJson};navigator.clipboard.writeText(t).then(function(){var btns=document.querySelectorAll(".cw-diff-toolbar__btn");var last=btns[btns.length-2];var orig=last.textContent;last.textContent="已复制！";setTimeout(function(){last.textContent=orig},1500)}).catch(function(){})}
+<\/script>
+</body>
+</html>`;
+}
+
+function handleDiffPopupOpen(body: string, res: import("node:http").ServerResponse, runtime: RuntimeConfig): void {
+  try {
+    const payload = readJsonBody<DiffPopupData>(body);
+    if (!payload.viewMode || !payload.sideHtml || !payload.mergedHtml) {
+      sendJson(res, 400, { ok: false, error: "Missing required fields: viewMode, sideHtml, mergedHtml" });
+      return;
+    }
+
+    const token = generateDiffToken();
+    diffPopupStore.set(token, {
+      data: payload,
+      expiresAt: Date.now() + DIFF_POPUP_TTL_MS,
+    });
+
+    const url = `http://${runtime.host}:${runtime.port}/diff-popup/${token}`;
+    openSystemBrowser(url);
+
+    sendJson(res, 200, { ok: true, url });
+  } catch (error) {
+    sendJson(res, 500, { ok: false, error: (error as Error).message });
+  }
+}
+
+function handleDiffPopupView(url: string, res: import("node:http").ServerResponse): void {
+  const token = url.replace("/diff-popup/", "").split("?")[0];
+  const entry = diffPopupStore.get(token);
+
+  if (!entry || Date.now() > entry.expiresAt) {
+    diffPopupStore.delete(token);
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.end("<!doctype html><html><body><p style=\"text-align:center;padding:48px;color:#888\">对比数据已过期，请从 WPS 面板重新触发对比。</p></body></html>");
+    return;
+  }
+
+  // Clean up expired entries periodically
+  if (Math.random() < 0.1) {
+    const now = Date.now();
+    for (const [k, v] of diffPopupStore) {
+      if (now > v.expiresAt) diffPopupStore.delete(k);
+    }
+  }
+
+  const html = buildDiffPopupHtml(entry.data);
+  res.statusCode = 200;
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  res.end(html);
+}
+
 function handleConfigGet(res: import("node:http").ServerResponse): void {
   const runtime = loadRuntimeConfig();
   const response: CodexBridgeConfig = { ...runtime, detectedCliPaths: detectCliPaths() };
@@ -514,6 +652,8 @@ const server = createServer((req, res) => {
     if (req.method === "GET" && req.url === "/models") return handleModels(res);
     if (req.method === "POST" && req.url === "/asset/illustration") return handleIllustration(body, res);
     if (req.method === "POST" && req.url === "/asset/upload-image") return handleUploadImage(body, res);
+    if (req.method === "POST" && req.url === "/diff-popup/open") return handleDiffPopupOpen(body, res, initialRuntime);
+    if (req.method === "GET" && (req.url || "").startsWith("/diff-popup/")) return handleDiffPopupView(req.url || "", res);
     if (req.method === "POST" && req.url === "/asset/upload-file") return handleUploadFile(body, res);
     sendJson(res, 404, { ok: false, error: "Not Found" });
   });
