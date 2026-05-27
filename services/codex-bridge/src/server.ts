@@ -462,7 +462,7 @@ function openSystemBrowser(url: string): void {
 }
 
 function buildDiffPopupHtml(data: DiffPopupData): string {
-  const { defaultView, sideHtml, mergedHtml, comprehensiveHtml, copyText, original, updated } = data;
+  const { defaultView, sideHtml, mergedHtml, comprehensiveHtml, copyText } = data;
   const title = "段落差异对比";
   const copyTextJson = JSON.stringify(copyText);
 
@@ -483,7 +483,13 @@ function buildDiffPopupHtml(data: DiffPopupData): string {
     ".cw-diff-toolbar__btn{height:28px;padding:0 12px;border:1px solid #ccc;border-radius:5px;background:#fff;color:#333;font-size:12px;cursor:pointer}\n" +
     ".cw-diff-toolbar__btn.is-active{background:#1d7f63;color:#fff;border-color:#1d7f63}\n" +
     ".cw-diff-toolbar__spacer{flex:1}\n" +
-    ".cw-diff-columns{flex:1 1 auto;min-height:0;display:flex;flex-direction:row;overflow:hidden}\n" +
+    ".cw-diff-main{flex:1 1 auto;min-height:0}\n" +
+    ".cw-diff-view{flex:1 1 auto;min-height:0;height:100%}\n" +
+    ".cw-diff-view[hidden]{display:none!important}\n" +
+    ".cw-diff-view--side{overflow:hidden}\n" +
+    ".cw-diff-view--merged{overflow:auto}\n" +
+    ".cw-diff-view--comprehensive{overflow:auto;padding:12px}\n" +
+    ".cw-diff-columns{flex:1 1 auto;min-height:0;display:flex;flex-direction:row;overflow:hidden;height:100%}\n" +
     ".cw-diff-column{flex:1 1 50%;min-width:0;display:flex;flex-direction:column;overflow:hidden}\n" +
     ".cw-diff-column--left{border-right:1px solid #ddd}\n" +
     ".cw-diff-column__title{flex:0 0 auto;padding:8px 14px;font-size:11px;font-weight:600;color:#888;border-bottom:1px solid #ddd;background:#f8f8f8}\n" +
@@ -494,9 +500,10 @@ function buildDiffPopupHtml(data: DiffPopupData): string {
     ".cw-diff-added{display:inline;background:#d4edda;color:#1a5c34;border-radius:2px;padding:1px 2px}\n" +
     ".cw-diff-removed{display:inline;background:#fde2e2;color:#9b2525;text-decoration:line-through;border-radius:2px;padding:1px 2px}\n" +
     ".cw-diff-nochange-message{display:flex;align-items:center;justify-content:center;height:100%;font-size:14px;color:#888}\n" +
-    ".cw-diff-comprehensive{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}\n" +
-    ".cw-diff-comprehensive__section{flex:1 1 auto;min-height:0;overflow:auto}\n" +
-    ".cw-diff-comprehensive__title{flex:0 0 auto;padding:8px 14px;font-size:11px;font-weight:600;color:#888;border-bottom:1px solid #ddd;background:#f8f8f8}\n" +
+    ".cw-diff-section{border:1px solid #ddd;border-radius:8px;overflow:hidden;background:#fff}\n" +
+    ".cw-diff-section+.cw-diff-section{margin-top:12px}\n" +
+    ".cw-diff-section h3{margin:0;padding:8px 14px;font-size:12px;color:#666;background:#f8f8f8;border-bottom:1px solid #ddd}\n" +
+    ".cw-diff-section--side .cw-diff-columns{height:260px}\n" +
     "@media(max-width:800px){.cw-diff-columns{flex-direction:column}.cw-diff-column--left{border-right:none;border-bottom:1px solid #ddd}}\n" +
     "</style>\n</head>\n<body>\n" +
     "<div class=\"cw-diff-toolbar\">" +
@@ -507,16 +514,16 @@ function buildDiffPopupHtml(data: DiffPopupData): string {
     "<span class=\"cw-diff-toolbar__spacer\"></span>" +
     "<button class=\"cw-diff-toolbar__btn\" onclick=\"copyResult()\">复制对比结果</button>" +
     "<button class=\"cw-diff-toolbar__btn\" onclick=\"window.close()\">关闭</button></div>\n" +
-    "<div class=\"cw-diff-columns\" id=\"side-view\"" + sideHidden + ">" + sideHtml + "</div>\n" +
-    "<div class=\"cw-diff-merged\" id=\"merged-view\"" + mergedHidden + ">" + mergedHtml + "</div>\n" +
-    "<div class=\"cw-diff-comprehensive\" id=\"comprehensive-view\"" + comprehensiveHidden + ">" + comprehensiveHtml + "</div>\n" +
+    "<main class=\"cw-diff-main\">\n" +
+    "<div id=\"side-view\" class=\"cw-diff-view cw-diff-view--side\"" + sideHidden + ">" + sideHtml + "</div>\n" +
+    "<div id=\"merged-view\" class=\"cw-diff-view cw-diff-view--merged\"" + mergedHidden + ">" + mergedHtml + "</div>\n" +
+    "<div id=\"comprehensive-view\" class=\"cw-diff-view cw-diff-view--comprehensive\"" + comprehensiveHidden + ">" + comprehensiveHtml + "</div>\n" +
+    "</main>\n" +
     "<script>\n" +
-    "function switchView(v){document.getElementById(\"side-view\").hidden=v!==\"side\";document.getElementById(\"merged-view\").hidden=v!==\"merged\";document.getElementById(\"comprehensive-view\").hidden=v!==\"comprehensive\";document.getElementById(\"btn-side\").classList.toggle(\"is-active\",v===\"side\");document.getElementById(\"btn-merged\").classList.toggle(\"is-active\",v===\"merged\");document.getElementById(\"btn-comprehensive\").classList.toggle(\"is-active\",v===\"comprehensive\")}\n" +
+    "function switchView(v){var s=document.getElementById(\"side-view\");var m=document.getElementById(\"merged-view\");var c=document.getElementById(\"comprehensive-view\");s.hidden=v!==\"side\";m.hidden=v!==\"merged\";c.hidden=v!==\"comprehensive\";document.getElementById(\"btn-side\").classList.toggle(\"is-active\",v===\"side\");document.getElementById(\"btn-merged\").classList.toggle(\"is-active\",v===\"merged\");document.getElementById(\"btn-comprehensive\").classList.toggle(\"is-active\",v===\"comprehensive\")}\n" +
     "function copyResult(){var t=" + copyTextJson + ";navigator.clipboard.writeText(t).then(function(){var btns=document.querySelectorAll(\".cw-diff-toolbar__btn\");var last=btns[btns.length-2];var orig=last.textContent;last.textContent=\"已复制！\";setTimeout(function(){last.textContent=orig},1500)}).catch(function(){})}\n" +
-    "<\/script>\n</body>\n</html>";
-}
-
-function handleDiffPopupOpen(body: string, res: import("node:http").ServerResponse, runtime: RuntimeConfig): void {
+    "<\\/script>\n</body>\n</html>";
+}function handleDiffPopupOpen(body: string, res: import("node:http").ServerResponse, runtime: RuntimeConfig): void {
   try {
     const payload = readJsonBody<DiffPopupData>(body);
     if (!payload.defaultView || !payload.sideHtml || !payload.mergedHtml || !payload.comprehensiveHtml) {

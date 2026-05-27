@@ -206,7 +206,7 @@ const cwDiffResultContentEl = document.querySelector<HTMLDivElement>("#cw-diff-r
 const cwDiffResultCloseBtn = document.querySelector<HTMLButtonElement>("#cw-diff-result-close");
 const cwDiffResultCopyBtn = document.querySelector<HTMLButtonElement>("#cw-diff-result-copy");
 const cwDiffResultMergedEl = document.querySelector<HTMLDivElement>("#cw-diff-result-merged");
-let cwDiffCurrentView: "side" | "merged" = "side";
+let cwDiffCurrentView: "side" | "merged" | "comprehensive" = "comprehensive";
 let splitProgressSignature = "";
 let activeHelpPopoverEl: HTMLElement | null = null;
 let helpTooltipEl: HTMLDivElement | null = null;
@@ -1502,7 +1502,7 @@ function escapeHtml(text: string): string {
     .replace(/'/g, "&#039;");
 }
 
-function buildSideBySideHtml(original: string, updated: string): string {
+function buildSideColumnsHtml(original: string, updated: string): string {
   if (original === updated) {
     return '<div class="cw-diff-nochange-message">未发现差异，两段文字完全相同。</div>';
   }
@@ -1542,7 +1542,15 @@ function buildSideBySideHtml(original: string, updated: string): string {
   );
 }
 
-function buildMergedHtml(original: string, updated: string): string {
+function buildSideViewHtml(original: string, updated: string): string {
+  return '<div class="cw-diff-columns">' + buildSideColumnsHtml(original, updated) + '</div>';
+}
+
+function buildSideBySideHtml(original: string, updated: string): string {
+  return buildSideViewHtml(original, updated);
+}
+
+function buildMergedContentHtml(original: string, updated: string): string {
   if (original === updated) {
     return '<div class="cw-diff-nochange-message">未发现差异，两段文字完全相同。</div>';
   }
@@ -1564,32 +1572,67 @@ function buildMergedHtml(original: string, updated: string): string {
   return html;
 }
 
-function renderSideBySideDiff(original: string, updated: string): void {
-  if (!cwDiffResultContentEl) return;
-  cwDiffResultContentEl.innerHTML = "";
-  cwDiffResultContentEl.innerHTML = buildSideBySideHtml(original, updated);
+function buildMergedViewHtml(original: string, updated: string): string {
+  return '<div class="cw-diff-merged">' + buildMergedContentHtml(original, updated) + '</div>';
+}
 
-  // Also pre-render merged view
-  if (cwDiffResultMergedEl) {
-    cwDiffResultMergedEl.innerHTML = "";
-    cwDiffResultMergedEl.innerHTML = buildMergedHtml(original, updated);
+function buildMergedHtml(original: string, updated: string): string {
+  return buildMergedContentHtml(original, updated);
+}
+
+function buildComprehensiveHtml(original: string, updated: string): string {
+  return (
+    '<section class="cw-diff-section cw-diff-section--side">' +
+    '<h3>左右视图</h3>' +
+    '<div class="cw-diff-columns">' +
+    buildSideColumnsHtml(original, updated) +
+    '</div>' +
+    '</section>' +
+    '<section class="cw-diff-section cw-diff-section--merged">' +
+    '<h3>合并视图</h3>' +
+    '<div class="cw-diff-merged">' +
+    buildMergedContentHtml(original, updated) +
+    '</div>' +
+    '</section>'
+  );
+}
+
+function renderDiffFallback(original: string, updated: string): void {
+  const sideEl = document.querySelector<HTMLDivElement>("#cw-diff-result-side");
+  const mergedEl = document.querySelector<HTMLDivElement>("#cw-diff-result-merged");
+  const comprehensiveEl = document.querySelector<HTMLDivElement>("#cw-diff-result-comprehensive");
+
+  if (sideEl) {
+    sideEl.innerHTML = '<div class="cw-diff-columns">' + buildSideColumnsHtml(original, updated) + '</div>';
+  }
+  if (mergedEl) {
+    mergedEl.innerHTML = '<div class="cw-diff-merged">' + buildMergedContentHtml(original, updated) + '</div>';
+  }
+  if (comprehensiveEl) {
+    comprehensiveEl.innerHTML = buildComprehensiveHtml(original, updated);
   }
 
-  // Reset view toggle
-  cwDiffCurrentView = "side";
+  cwDiffCurrentView = "comprehensive";
   updateDiffViewToggle();
 }
 
 function updateDiffViewToggle(): void {
   const sideBtn = document.querySelector<HTMLButtonElement>('[data-cw-diff-view="side"]');
   const mergedBtn = document.querySelector<HTMLButtonElement>('[data-cw-diff-view="merged"]');
+  const comprehensiveBtn = document.querySelector<HTMLButtonElement>('[data-cw-diff-view="comprehensive"]');
+  const sideEl = document.querySelector<HTMLDivElement>("#cw-diff-result-side");
+  const mergedEl = document.querySelector<HTMLDivElement>("#cw-diff-result-merged");
+  const comprehensiveEl = document.querySelector<HTMLDivElement>("#cw-diff-result-comprehensive");
+
   if (sideBtn) sideBtn.classList.toggle("is-active", cwDiffCurrentView === "side");
   if (mergedBtn) mergedBtn.classList.toggle("is-active", cwDiffCurrentView === "merged");
-  if (cwDiffResultContentEl) cwDiffResultContentEl.hidden = cwDiffCurrentView !== "side";
-  if (cwDiffResultMergedEl) cwDiffResultMergedEl.hidden = cwDiffCurrentView !== "merged";
+  if (comprehensiveBtn) comprehensiveBtn.classList.toggle("is-active", cwDiffCurrentView === "comprehensive");
+  if (sideEl) sideEl.hidden = cwDiffCurrentView !== "side";
+  if (mergedEl) mergedEl.hidden = cwDiffCurrentView !== "merged";
+  if (comprehensiveEl) comprehensiveEl.hidden = cwDiffCurrentView !== "comprehensive";
 }
 
-function switchDiffView(view: "side" | "merged"): void {
+function switchDiffView(view: "side" | "merged" | "comprehensive"): void {
   cwDiffCurrentView = view;
   updateDiffViewToggle();
 }
@@ -1608,18 +1651,9 @@ function handleParagraphDiff(): void {
     return;
   }
 
-  // Compute all three diff views
-  const sideHtml = text1 === text2
-    ? '<div class="cw-diff-nochange-message">未发现差异，两段文字完全相同。</div>'
-    : buildSideBySideHtml(text1, text2);
-
-  const mergedHtml = text1 === text2
-    ? '<div class="cw-diff-nochange-message">未发现差异，两段文字完全相同。</div>'
-    : buildMergedHtml(text1, text2);
-
-  const comprehensiveHtml = text1 === text2
-    ? '<div class="cw-diff-nochange-message">未发现差异，两段文字完全相同。</div>'
-    : buildComprehensiveHtml(text1, text2, sideHtml, mergedHtml);
+  const sideViewHtml = buildSideViewHtml(text1, text2);
+  const mergedViewHtml = buildMergedViewHtml(text1, text2);
+  const comprehensiveHtml = buildComprehensiveHtml(text1, text2);
 
   const copyText = "=== 段落差异对比 ===\n\n--- 段落 1（原始/旧版）---\n" +
     text1 + "\n\n--- 段落 2（修改/新版）---\n" +
@@ -1629,8 +1663,8 @@ function handleParagraphDiff(): void {
   // Strategy A: open system browser via bridge
   openDiffPopupExternal({
     defaultView: "comprehensive",
-    sideHtml,
-    mergedHtml,
+    sideHtml: sideViewHtml,
+    mergedHtml: mergedViewHtml,
     comprehensiveHtml,
     copyText,
     original: text1,
@@ -1651,14 +1685,14 @@ function handleParagraphDiff(): void {
     }
 
     if (popout && !popout.closed) {
-      writeDiffPopoutWindow(popout, text1, text2, sideHtml, mergedHtml, comprehensiveHtml);
+      writeDiffPopoutWindow(popout, text1, text2, sideViewHtml, mergedViewHtml, comprehensiveHtml);
       setStatus("已打开差异对比窗口（WebView 内）。");
       return;
     }
 
     // Strategy C: in-panel dialog (last resort)
     setStatus("当前 WPS 插件环境限制，且本地 bridge 未能打开外部窗口，已回退到面板内显示。", true);
-    renderSideBySideDiff(text1, text2);
+    renderDiffFallback(text1, text2);
     if (cwDiffResultDialogEl) {
       cwDiffResultDialogEl.hidden = false;
       cwDiffResultDialogEl.setAttribute("aria-hidden", "false");
@@ -1666,69 +1700,12 @@ function handleParagraphDiff(): void {
   });
 }
 
-function writeDiffPopoutMergedWindow(
-  w: Window,
-  original: string,
-  updated: string,
-  mergedHtml: string,
-  copyText: string,
-): void {
-  const copyTextJson = JSON.stringify(copyText);
-  const doc = w.document;
-  doc.title = "段落合并对比";
-  doc.write("<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"UTF-8\">\n" +
-    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" +
-    "<title>段落合并对比</title>\n<style>\n" +
-    "*{box-sizing:border-box;margin:0;padding:0}\n" +
-    "body{font-family:\"Segoe UI\",\"Microsoft YaHei\",\"PingFang SC\",sans-serif;font-size:14px;color:#1a1a1a;background:#fff;display:flex;flex-direction:column;height:100vh;overflow:hidden}\n" +
-    ".cw-diff-toolbar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid #ddd;background:#fafafa}\n" +
-    ".cw-diff-toolbar__label{font-size:12px;color:#888}\n" +
-    ".cw-diff-toolbar__btn{height:28px;padding:0 12px;border:1px solid #ccc;border-radius:5px;background:#fff;color:#333;font-size:12px;cursor:pointer}\n" +
-    ".cw-diff-toolbar__spacer{flex:1}\n" +
-    ".cw-diff-merged{flex:1 1 auto;min-height:0;overflow:auto;padding:14px;background:#fcfcfc}\n" +
-    ".cw-diff-merged-paragraph{margin:0;white-space:pre-wrap;word-break:break-word;line-height:1.85;font-size:14px}\n" +
-    ".cw-diff-added{display:inline;background:#d4edda;color:#1a5c34;border-radius:2px;padding:1px 2px}\n" +
-    ".cw-diff-removed{display:inline;background:#fde2e2;color:#9b2525;text-decoration:line-through;border-radius:2px;padding:1px 2px}\n" +
-    ".cw-diff-nochange-message{display:flex;align-items:center;justify-content:center;height:100%;font-size:14px;color:#888}\n" +
-    "</style>\n</head>\n<body>\n" +
-    "<div class=\"cw-diff-toolbar\">" +
-    "<span class=\"cw-diff-toolbar__label\">合并对比</span>" +
-    "<span class=\"cw-diff-toolbar__spacer\"></span>" +
-    "<button class=\"cw-diff-toolbar__btn\" onclick=\"copyResult()\">复制对比结果</button>" +
-    "<button class=\"cw-diff-toolbar__btn\" onclick=\"window.close()\">关闭</button></div>\n" +
-    "<div class=\"cw-diff-merged\" id=\"merged-view\">" + mergedHtml + "</div>\n" +
-    "<script>\n" +
-    "function copyResult(){var t=" + copyTextJson + ";navigator.clipboard.writeText(t).then(function(){var btns=document.querySelectorAll(\".cw-diff-toolbar__btn\");var last=btns[btns.length-2];var orig=last.textContent;last.textContent=\"已复制！\";setTimeout(function(){last.textContent=orig},1500)}).catch(function(){})}\n" +
-    "<\\/script>\n</body>\n</html>");
-  doc.close();
-}
-
-function buildComprehensiveHtml(
-  original: string,
-  updated: string,
-  sideHtml: string,
-  mergedHtml: string,
-): string {
-  return (
-    '<div style="display:flex;flex-direction:column;height:100%;overflow:hidden">' +
-    '<div style="flex:0 0 auto;padding:8px 14px;font-size:11px;font-weight:600;color:#888;border-bottom:1px solid #ddd;background:#f8f8f8">左右对比</div>' +
-    '<div style="flex:1 1 auto;min-height:0;overflow:auto">' +
-    sideHtml +
-    '</div>' +
-    '<div style="flex:0 0 auto;padding:8px 14px;font-size:11px;font-weight:600;color:#888;border-top:1px solid #ddd;border-bottom:1px solid #ddd;background:#f8f8f8">合并对比</div>' +
-    '<div style="flex:1 1 auto;min-height:0;overflow:auto;padding:14px;background:#fcfcfc">' +
-    mergedHtml +
-    '</div>' +
-    '</div>'
-  );
-}
-
 function writeDiffPopoutWindow(
   w: Window,
   original: string,
   updated: string,
-  sideHtml: string,
-  mergedHtml: string,
+  sideViewHtml: string,
+  mergedViewHtml: string,
   comprehensiveHtml: string,
 ): void {
   const copyText = JSON.stringify(
@@ -1750,7 +1727,13 @@ function writeDiffPopoutWindow(
     ".cw-diff-toolbar__btn{height:28px;padding:0 12px;border:1px solid #ccc;border-radius:5px;background:#fff;color:#333;font-size:12px;cursor:pointer}\n" +
     ".cw-diff-toolbar__btn.is-active{background:#1d7f63;color:#fff;border-color:#1d7f63}\n" +
     ".cw-diff-toolbar__spacer{flex:1}\n" +
-    ".cw-diff-columns{flex:1 1 auto;min-height:0;display:flex;flex-direction:row;overflow:hidden}\n" +
+    ".cw-diff-main{flex:1 1 auto;min-height:0}\n" +
+    ".cw-diff-view{flex:1 1 auto;min-height:0;height:100%}\n" +
+    ".cw-diff-view[hidden]{display:none!important}\n" +
+    ".cw-diff-view--side{overflow:hidden}\n" +
+    ".cw-diff-view--merged{overflow:auto}\n" +
+    ".cw-diff-view--comprehensive{overflow:auto;padding:12px}\n" +
+    ".cw-diff-columns{flex:1 1 auto;min-height:0;display:flex;flex-direction:row;overflow:hidden;height:100%}\n" +
     ".cw-diff-column{flex:1 1 50%;min-width:0;display:flex;flex-direction:column;overflow:hidden}\n" +
     ".cw-diff-column--left{border-right:1px solid #ddd}\n" +
     ".cw-diff-column__title{flex:0 0 auto;padding:8px 14px;font-size:11px;font-weight:600;color:#888;border-bottom:1px solid #ddd;background:#f8f8f8}\n" +
@@ -1761,9 +1744,10 @@ function writeDiffPopoutWindow(
     ".cw-diff-added{display:inline;background:#d4edda;color:#1a5c34;border-radius:2px;padding:1px 2px}\n" +
     ".cw-diff-removed{display:inline;background:#fde2e2;color:#9b2525;text-decoration:line-through;border-radius:2px;padding:1px 2px}\n" +
     ".cw-diff-nochange-message{display:flex;align-items:center;justify-content:center;height:100%;font-size:14px;color:#888}\n" +
-    ".cw-diff-comprehensive{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}\n" +
-    ".cw-diff-comprehensive__section{flex:1 1 auto;min-height:0;overflow:auto}\n" +
-    ".cw-diff-comprehensive__title{flex:0 0 auto;padding:8px 14px;font-size:11px;font-weight:600;color:#888;border-bottom:1px solid #ddd;background:#f8f8f8}\n" +
+    ".cw-diff-section{border:1px solid #ddd;border-radius:8px;overflow:hidden;background:#fff}\n" +
+    ".cw-diff-section+.cw-diff-section{margin-top:12px}\n" +
+    ".cw-diff-section h3{margin:0;padding:8px 14px;font-size:12px;color:#666;background:#f8f8f8;border-bottom:1px solid #ddd}\n" +
+    ".cw-diff-section--side .cw-diff-columns{height:260px}\n" +
     "@media(max-width:800px){.cw-diff-columns{flex-direction:column}.cw-diff-column--left{border-right:none;border-bottom:1px solid #ddd}}\n" +
     "</style>\n</head>\n<body>\n" +
     "<div class=\"cw-diff-toolbar\">" +
@@ -1774,13 +1758,15 @@ function writeDiffPopoutWindow(
     "<span class=\"cw-diff-toolbar__spacer\"></span>" +
     "<button class=\"cw-diff-toolbar__btn\" onclick=\"copyResult()\">复制对比结果</button>" +
     "<button class=\"cw-diff-toolbar__btn\" onclick=\"window.close()\">关闭</button></div>\n" +
-    "<div class=\"cw-diff-columns\" id=\"side-view\" hidden>" + sideHtml + "</div>\n" +
-    "<div class=\"cw-diff-merged\" id=\"merged-view\" hidden>" + mergedHtml + "</div>\n" +
-    "<div class=\"cw-diff-comprehensive\" id=\"comprehensive-view\">" + comprehensiveHtml + "</div>\n" +
+    "<main class=\"cw-diff-main\">\n" +
+    "<div id=\"side-view\" class=\"cw-diff-view cw-diff-view--side\" hidden>" + sideViewHtml + "</div>\n" +
+    "<div id=\"merged-view\" class=\"cw-diff-view cw-diff-view--merged\" hidden>" + mergedViewHtml + "</div>\n" +
+    "<div id=\"comprehensive-view\" class=\"cw-diff-view cw-diff-view--comprehensive\">" + comprehensiveHtml + "</div>\n" +
+    "</main>\n" +
     "<script>\n" +
     "function switchView(v){document.getElementById(\"side-view\").hidden=v!==\"side\";document.getElementById(\"merged-view\").hidden=v!==\"merged\";document.getElementById(\"comprehensive-view\").hidden=v!==\"comprehensive\";document.getElementById(\"btn-side\").classList.toggle(\"is-active\",v===\"side\");document.getElementById(\"btn-merged\").classList.toggle(\"is-active\",v===\"merged\");document.getElementById(\"btn-comprehensive\").classList.toggle(\"is-active\",v===\"comprehensive\")}\n" +
     "function copyResult(){var t=" + copyText + ";navigator.clipboard.writeText(t).then(function(){var btns=document.querySelectorAll(\".cw-diff-toolbar__btn\");var last=btns[btns.length-2];var orig=last.textContent;last.textContent=\"已复制！\";setTimeout(function(){last.textContent=orig},1500)}).catch(function(){})}\n" +
-    "<\\/script>\n</body>\n</html>");
+    "<\/script>\n</body>\n</html>");
   doc.close();
 }
 

@@ -573,23 +573,27 @@
       <section class="cw-diff-modal__content" role="dialog" aria-modal="true" aria-labelledby="cw-diff-result-title">
         <header class="cw-diff-modal__header">
           <h2 id="cw-diff-result-title">段落差异对比</h2>
-          <p class="hint">左侧为原始段落，右侧为修改后段落。浅红背景+删除线为删除内容，浅绿背景为新增内容。</p>
+          <p class="hint">浅红背景+删除线为删除内容，浅绿背景为新增内容。</p>
         </header>
         <div class="cw-diff-toolbar">
           <span class="cw-diff-toolbar__label">视图：</span>
-          <button class="cw-diff-toolbar__btn is-active" data-cw-diff-view="side" type="button">左右对比</button>
-          <button class="cw-diff-toolbar__btn" data-cw-diff-view="merged" type="button">合并对比</button>
+          <button class="cw-diff-toolbar__btn" data-cw-diff-view="side" type="button">左右视图</button>
+          <button class="cw-diff-toolbar__btn" data-cw-diff-view="merged" type="button">合并视图</button>
+          <button class="cw-diff-toolbar__btn is-active" data-cw-diff-view="comprehensive" type="button">综合视图</button>
+          <span class="cw-diff-toolbar__spacer" style="flex:1"></span>
         </div>
-        <div id="cw-diff-result-content" class="cw-diff-columns" aria-live="polite"></div>
-        <div id="cw-diff-result-merged" class="cw-diff-merged" aria-live="polite" hidden></div>
+        <main class="cw-diff-main">
+          <div id="cw-diff-result-side" class="cw-diff-view cw-diff-view--side" hidden></div>
+          <div id="cw-diff-result-merged" class="cw-diff-view cw-diff-view--merged" hidden></div>
+          <div id="cw-diff-result-comprehensive" class="cw-diff-view cw-diff-view--comprehensive"></div>
+        </main>
         <footer class="cw-diff-modal__actions">
           <button id="cw-diff-result-copy" class="button-secondary" type="button">复制对比结果</button>
           <button id="cw-diff-result-close" class="button-secondary" type="button">关闭</button>
         </footer>
       </section>
     </div>
-
-    <div id="diff-modal" class="diff-modal" hidden aria-hidden="true">
+<div id="diff-modal" class="diff-modal" hidden aria-hidden="true">
       <div class="diff-modal__backdrop"></div>
       <section class="diff-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="diff-title">
         <header class="diff-modal__header">

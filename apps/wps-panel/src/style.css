@@ -2841,6 +2841,59 @@ button,
   cursor: pointer;
 }
 
+
+/* ---- Three-view containers ---- */
+
+.cw-diff-main,
+.cw-diff-view {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.cw-diff-view[hidden] {
+  display: none !important;
+}
+
+.cw-diff-view--side {
+  overflow: hidden;
+}
+
+.cw-diff-view--merged {
+  overflow: auto;
+}
+
+.cw-diff-view--comprehensive {
+  overflow: auto;
+  padding: 12px;
+}
+
+.cw-diff-section {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.cw-diff-section + .cw-diff-section {
+  margin-top: 12px;
+}
+
+.cw-diff-section h3 {
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: #666;
+  background: #f8f8f8;
+  border-bottom: 1px solid #ddd;
+}
+
+.cw-diff-section--side .cw-diff-columns {
+  height: 280px;
+}
+
+.cw-diff-toolbar__spacer {
+  flex: 1;
+}
 .cw-diff-toolbar__btn.is-active {
   background: var(--accent);
   color: #ffffff;
