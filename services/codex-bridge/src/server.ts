@@ -430,9 +430,10 @@ function handleRunStream(
 // ---- Diff Popup ----
 
 interface DiffPopupData {
-  viewMode: "side" | "merged";
+  defaultView: "side" | "merged" | "comprehensive";
   sideHtml: string;
   mergedHtml: string;
+  comprehensiveHtml: string;
   copyText: string;
   original: string;
   updated: string;
@@ -461,63 +462,65 @@ function openSystemBrowser(url: string): void {
 }
 
 function buildDiffPopupHtml(data: DiffPopupData): string {
-  const { viewMode, sideHtml, mergedHtml, copyText, original, updated } = data;
-  const isMerged = viewMode === "merged";
-  const title = isMerged ? "段落合并对比" : "段落差异对比";
+  const { defaultView, sideHtml, mergedHtml, comprehensiveHtml, copyText, original, updated } = data;
+  const title = "段落差异对比";
   const copyTextJson = JSON.stringify(copyText);
 
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${title}</title>
-<style>
-*{box-sizing:border-box;margin:0;padding:0}
-body{font-family:"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif;font-size:14px;color:#1a1a1a;background:#fff;display:flex;flex-direction:column;height:100vh;overflow:hidden}
-.cw-diff-toolbar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid #ddd;background:#fafafa}
-.cw-diff-toolbar__label{font-size:12px;color:#888}
-.cw-diff-toolbar__btn{height:28px;padding:0 12px;border:1px solid #ccc;border-radius:5px;background:#fff;color:#333;font-size:12px;cursor:pointer}
-.cw-diff-toolbar__btn.is-active{background:#1d7f63;color:#fff;border-color:#1d7f63}
-.cw-diff-toolbar__spacer{flex:1}
-.cw-diff-columns{flex:1 1 auto;min-height:0;display:flex;flex-direction:row;overflow:hidden}
-.cw-diff-column{flex:1 1 50%;min-width:0;display:flex;flex-direction:column;overflow:hidden}
-.cw-diff-column--left{border-right:1px solid #ddd}
-.cw-diff-column__title{flex:0 0 auto;padding:8px 14px;font-size:11px;font-weight:600;color:#888;border-bottom:1px solid #ddd;background:#f8f8f8}
-.cw-diff-column__body{flex:1 1 auto;min-height:0;overflow:auto;padding:14px;background:#fcfcfc}
-.cw-diff-paragraph{margin:0;white-space:pre-wrap;word-break:break-word;line-height:1.85;font-size:14px}
-.cw-diff-merged{flex:1 1 auto;min-height:0;overflow:auto;padding:14px;background:#fcfcfc}
-.cw-diff-merged-paragraph{margin:0;white-space:pre-wrap;word-break:break-word;line-height:1.85;font-size:14px}
-.cw-diff-added{display:inline;background:#d4edda;color:#1a5c34;border-radius:2px;padding:1px 2px}
-.cw-diff-removed{display:inline;background:#fde2e2;color:#9b2525;text-decoration:line-through;border-radius:2px;padding:1px 2px}
-.cw-diff-nochange-message{display:flex;align-items:center;justify-content:center;height:100%;font-size:14px;color:#888}
-@media(max-width:800px){.cw-diff-columns{flex-direction:column}.cw-diff-column--left{border-right:none;border-bottom:1px solid #ddd}}
-</style>
-</head>
-<body>
-<div class="cw-diff-toolbar">
-  <span class="cw-diff-toolbar__label">${isMerged ? "合并对比" : "视图："}</span>
-  ${isMerged ? "" : '<button class="cw-diff-toolbar__btn is-active" onclick="switchView(\'side\')" id="btn-side">左右对比</button><button class="cw-diff-toolbar__btn" onclick="switchView(\'merged\')" id="btn-merged">合并对比</button>'}
-  <span class="cw-diff-toolbar__spacer"></span>
-  <button class="cw-diff-toolbar__btn" onclick="copyResult()">复制对比结果</button>
-  <button class="cw-diff-toolbar__btn" onclick="window.close()">关闭</button>
-</div>
-${isMerged
-  ? '<div class="cw-diff-merged" id="merged-view">' + mergedHtml + '</div>'
-  : '<div class="cw-diff-columns" id="side-view">' + sideHtml + '</div><div class="cw-diff-merged" id="merged-view" hidden>' + mergedHtml + '</div>'}
-<script>
-${isMerged ? "" : 'function switchView(v){document.getElementById("side-view").hidden=v!=="side";document.getElementById("merged-view").hidden=v!=="merged";document.getElementById("btn-side").classList.toggle("is-active",v==="side");document.getElementById("btn-merged").classList.toggle("is-active",v==="merged")}'}
-function copyResult(){var t=${copyTextJson};navigator.clipboard.writeText(t).then(function(){var btns=document.querySelectorAll(".cw-diff-toolbar__btn");var last=btns[btns.length-2];var orig=last.textContent;last.textContent="已复制！";setTimeout(function(){last.textContent=orig},1500)}).catch(function(){})}
-<\/script>
-</body>
-</html>`;
+  const sideHidden = defaultView === "side" ? "" : " hidden";
+  const mergedHidden = defaultView === "merged" ? "" : " hidden";
+  const comprehensiveHidden = defaultView === "comprehensive" ? "" : " hidden";
+  const sideActive = defaultView === "side" ? " is-active" : "";
+  const mergedActive = defaultView === "merged" ? " is-active" : "";
+  const comprehensiveActive = defaultView === "comprehensive" ? " is-active" : "";
+
+  return "<!doctype html>\n<html lang=\"zh-CN\">\n<head>\n<meta charset=\"UTF-8\">\n" +
+    "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" +
+    "<title>" + title + "</title>\n<style>\n" +
+    "*{box-sizing:border-box;margin:0;padding:0}\n" +
+    "body{font-family:\"Segoe UI\",\"Microsoft YaHei\",\"PingFang SC\",sans-serif;font-size:14px;color:#1a1a1a;background:#fff;display:flex;flex-direction:column;height:100vh;overflow:hidden}\n" +
+    ".cw-diff-toolbar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:10px 16px;border-bottom:1px solid #ddd;background:#fafafa}\n" +
+    ".cw-diff-toolbar__label{font-size:12px;color:#888}\n" +
+    ".cw-diff-toolbar__btn{height:28px;padding:0 12px;border:1px solid #ccc;border-radius:5px;background:#fff;color:#333;font-size:12px;cursor:pointer}\n" +
+    ".cw-diff-toolbar__btn.is-active{background:#1d7f63;color:#fff;border-color:#1d7f63}\n" +
+    ".cw-diff-toolbar__spacer{flex:1}\n" +
+    ".cw-diff-columns{flex:1 1 auto;min-height:0;display:flex;flex-direction:row;overflow:hidden}\n" +
+    ".cw-diff-column{flex:1 1 50%;min-width:0;display:flex;flex-direction:column;overflow:hidden}\n" +
+    ".cw-diff-column--left{border-right:1px solid #ddd}\n" +
+    ".cw-diff-column__title{flex:0 0 auto;padding:8px 14px;font-size:11px;font-weight:600;color:#888;border-bottom:1px solid #ddd;background:#f8f8f8}\n" +
+    ".cw-diff-column__body{flex:1 1 auto;min-height:0;overflow:auto;padding:14px;background:#fcfcfc}\n" +
+    ".cw-diff-paragraph{margin:0;white-space:pre-wrap;word-break:break-word;line-height:1.85;font-size:14px}\n" +
+    ".cw-diff-merged{flex:1 1 auto;min-height:0;overflow:auto;padding:14px;background:#fcfcfc}\n" +
+    ".cw-diff-merged-paragraph{margin:0;white-space:pre-wrap;word-break:break-word;line-height:1.85;font-size:14px}\n" +
+    ".cw-diff-added{display:inline;background:#d4edda;color:#1a5c34;border-radius:2px;padding:1px 2px}\n" +
+    ".cw-diff-removed{display:inline;background:#fde2e2;color:#9b2525;text-decoration:line-through;border-radius:2px;padding:1px 2px}\n" +
+    ".cw-diff-nochange-message{display:flex;align-items:center;justify-content:center;height:100%;font-size:14px;color:#888}\n" +
+    ".cw-diff-comprehensive{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;overflow:hidden}\n" +
+    ".cw-diff-comprehensive__section{flex:1 1 auto;min-height:0;overflow:auto}\n" +
+    ".cw-diff-comprehensive__title{flex:0 0 auto;padding:8px 14px;font-size:11px;font-weight:600;color:#888;border-bottom:1px solid #ddd;background:#f8f8f8}\n" +
+    "@media(max-width:800px){.cw-diff-columns{flex-direction:column}.cw-diff-column--left{border-right:none;border-bottom:1px solid #ddd}}\n" +
+    "</style>\n</head>\n<body>\n" +
+    "<div class=\"cw-diff-toolbar\">" +
+    "<span class=\"cw-diff-toolbar__label\">视图：</span>" +
+    "<button class=\"cw-diff-toolbar__btn" + sideActive + "\" onclick=\"switchView('side')\" id=\"btn-side\">左右视图</button>" +
+    "<button class=\"cw-diff-toolbar__btn" + mergedActive + "\" onclick=\"switchView('merged')\" id=\"btn-merged\">合并视图</button>" +
+    "<button class=\"cw-diff-toolbar__btn" + comprehensiveActive + "\" onclick=\"switchView('comprehensive')\" id=\"btn-comprehensive\">综合视图</button>" +
+    "<span class=\"cw-diff-toolbar__spacer\"></span>" +
+    "<button class=\"cw-diff-toolbar__btn\" onclick=\"copyResult()\">复制对比结果</button>" +
+    "<button class=\"cw-diff-toolbar__btn\" onclick=\"window.close()\">关闭</button></div>\n" +
+    "<div class=\"cw-diff-columns\" id=\"side-view\"" + sideHidden + ">" + sideHtml + "</div>\n" +
+    "<div class=\"cw-diff-merged\" id=\"merged-view\"" + mergedHidden + ">" + mergedHtml + "</div>\n" +
+    "<div class=\"cw-diff-comprehensive\" id=\"comprehensive-view\"" + comprehensiveHidden + ">" + comprehensiveHtml + "</div>\n" +
+    "<script>\n" +
+    "function switchView(v){document.getElementById(\"side-view\").hidden=v!==\"side\";document.getElementById(\"merged-view\").hidden=v!==\"merged\";document.getElementById(\"comprehensive-view\").hidden=v!==\"comprehensive\";document.getElementById(\"btn-side\").classList.toggle(\"is-active\",v===\"side\");document.getElementById(\"btn-merged\").classList.toggle(\"is-active\",v===\"merged\");document.getElementById(\"btn-comprehensive\").classList.toggle(\"is-active\",v===\"comprehensive\")}\n" +
+    "function copyResult(){var t=" + copyTextJson + ";navigator.clipboard.writeText(t).then(function(){var btns=document.querySelectorAll(\".cw-diff-toolbar__btn\");var last=btns[btns.length-2];var orig=last.textContent;last.textContent=\"已复制！\";setTimeout(function(){last.textContent=orig},1500)}).catch(function(){})}\n" +
+    "<\/script>\n</body>\n</html>";
 }
 
 function handleDiffPopupOpen(body: string, res: import("node:http").ServerResponse, runtime: RuntimeConfig): void {
   try {
     const payload = readJsonBody<DiffPopupData>(body);
-    if (!payload.viewMode || !payload.sideHtml || !payload.mergedHtml) {
-      sendJson(res, 400, { ok: false, error: "Missing required fields: viewMode, sideHtml, mergedHtml" });
+    if (!payload.defaultView || !payload.sideHtml || !payload.mergedHtml || !payload.comprehensiveHtml) {
+      sendJson(res, 400, { ok: false, error: "Missing required fields: defaultView, sideHtml, mergedHtml, comprehensiveHtml" });
       return;
     }
 

@@ -197,9 +197,10 @@ export async function uploadFileAsset(payload: FileUploadRequest): Promise<FileU
 
 
 export interface DiffPopupOpenRequest {
-  viewMode: "side" | "merged";
+  defaultView: "side" | "merged" | "comprehensive";
   sideHtml: string;
   mergedHtml: string;
+  comprehensiveHtml: string;
   copyText: string;
   original: string;
   updated: string;
