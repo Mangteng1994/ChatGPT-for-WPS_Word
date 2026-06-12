@@ -95,8 +95,12 @@
               <span class="style-workflow-nav__num">04</span>
               <span class="style-workflow-nav__label">章节导出</span>
             </a>
-            <a class="style-workflow-nav__item" href="#style-tool-diff">
+            <a class="style-workflow-nav__item" href="#style-tool-page-export">
               <span class="style-workflow-nav__num">05</span>
+              <span class="style-workflow-nav__label">页码导出</span>
+            </a>
+            <a class="style-workflow-nav__item" href="#style-tool-diff">
+              <span class="style-workflow-nav__num">06</span>
               <span class="style-workflow-nav__label">Diff</span>
             </a>
           </aside>
@@ -204,6 +208,7 @@
                     <option value="other-text">除标题、图片所在段落、表格文字以外所有文字</option>
                     <option value="image-paragraph">图片所在段落</option>
                     <option value="image-caption">图片下图名</option>
+                    <option value="table-caption-above">表格上表名</option>
                     <option value="table-text">表格文字</option>
                   </select>
                 </label>
@@ -318,9 +323,36 @@
               <div id="split-progress-text" class="split-progress__text">等待开始</div>
             </div>
           </section>
-          <section id="style-tool-diff" class="style-tool" aria-label="段落差异对比">
+          <section id="style-tool-page-export" class="style-tool" aria-label="按页码范围导出">
             <div class="tool-card__head">
               <span class="tool-card__step">05</span>
+              <div>
+                <div class="style-tool__title-row">
+                  <div class="style-tool__sub-title">页码导出</div>
+                  <span class="help-popover" tabindex="0" aria-label="功能说明">
+                    ?
+                    <span class="help-popover__bubble" role="tooltip">按页码范围导出为新的 Word 文档，文件名使用起始页码第一行文字。</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div id="page-export-ranges" class="page-export-ranges" aria-live="polite"></div>
+            <div class="style-tool__actions">
+              <button id="add-page-export-range" class="button-secondary page-export-ranges__add" type="button" aria-label="新增页码范围">+</button>
+            </div>
+            <div class="style-tool__grid">
+              <label>
+                <span>保存目录</span>
+                <input id="page-export-output-dir" type="text" placeholder="如 D:\导出\页码导出" />
+              </label>
+            </div>
+            <div class="style-tool__actions style-tool__actions--end">
+              <button id="export-docx-by-page-range" type="button">按页码导出</button>
+            </div>
+          </section>
+          <section id="style-tool-diff" class="style-tool" aria-label="段落差异对比">
+            <div class="tool-card__head">
+              <span class="tool-card__step">06</span>
               <div>
                 <div class="style-tool__title-row">
                   <div class="style-tool__sub-title">Diff</div>

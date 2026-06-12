@@ -18,7 +18,8 @@
     "test:style-nl": "tsx apps/wps-panel/src/style-nl-parser.test.ts",
     "test:style-nl-generic": "tsx apps/wps-panel/src/style-nl-generic.test.ts",
     "test:style-inspect": "tsx apps/wps-panel/src/style-inspector.test.ts",
-    "test:style-all": "npm run test:style-nl && npm run test:style-nl-generic && npm run test:style-inspect"
+    "test:style-apply-range": "tsx apps/wps-panel/src/wps-adapter-table-caption.test.ts",
+    "test:style-all": "npm run test:style-nl && npm run test:style-nl-generic && npm run test:style-inspect && npm run test:style-apply-range"
   },
   "devDependencies": {
     "tsx": "^4.20.6",

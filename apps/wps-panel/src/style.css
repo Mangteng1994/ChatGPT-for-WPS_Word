@@ -569,6 +569,36 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.page-export-ranges {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.page-export-range-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 34px;
+  gap: 6px;
+  align-items: end;
+}
+
+.page-export-range-row__remove,
+.page-export-ranges__add {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  line-height: 1;
+  font-size: 20px;
+}
+
+.page-export-range-row__remove {
+  justify-self: end;
+}
+
+.page-export-ranges__add {
+  flex: 0 0 34px;
+}
+
 .style-apply-switch {
   margin-top: 8px;
 }
@@ -2639,7 +2669,7 @@ button,
   }
 }
 
-/* ---- Paragraph Diff (005) ---- */
+/* ---- Paragraph Diff (006) ---- */
 
 .cw-diff-panel {
   display: flex;
@@ -2968,5 +2998,13 @@ button,
 @media (max-width: 720px) {
   .cw-diff-inputs {
     grid-template-columns: 1fr;
+  }
+
+  .page-export-range-row {
+    grid-template-columns: 1fr;
+  }
+
+  .page-export-range-row__remove {
+    justify-self: end;
   }
 }

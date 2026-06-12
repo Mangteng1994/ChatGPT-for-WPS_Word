@@ -33,6 +33,8 @@ import {
   applyPunctuationFontByPageRange,
   applyStyleByPageRange,
   describeSelectionStyle,
+  exportDocumentByPageRange,
+  exportDocumentsByPageRanges,
   getCurrentParagraphText,
   getDocumentIdentity,
   getDocumentText,
@@ -46,6 +48,7 @@ import {
   replaceSelection,
   replaceSelectionWithTable,
   splitDocumentByHeadingRange,
+  type PageExportRangeSpec,
   type PunctuationTargetType,
   type SplitDocumentProgress,
   type StyleTargetType,
@@ -172,6 +175,10 @@ const splitPageToEl = document.querySelector<HTMLInputElement>("#split-page-to")
 const splitHeadingLevelEl = document.querySelector<HTMLSelectElement>("#split-heading-level");
 const splitOutputDirEl = document.querySelector<HTMLInputElement>("#split-output-dir");
 const splitDocxByHeadingBtn = document.querySelector<HTMLButtonElement>("#split-docx-by-heading");
+const pageExportRangesEl = document.querySelector<HTMLDivElement>("#page-export-ranges");
+const addPageExportRangeBtn = document.querySelector<HTMLButtonElement>("#add-page-export-range");
+const pageExportOutputDirEl = document.querySelector<HTMLInputElement>("#page-export-output-dir");
+const exportDocxByPageRangeBtn = document.querySelector<HTMLButtonElement>("#export-docx-by-page-range");
 const splitProgressEl = document.querySelector<HTMLDivElement>("#split-progress");
 const splitProgressBarEl = document.querySelector<HTMLDivElement>("#split-progress-bar");
 const splitProgressTextEl = document.querySelector<HTMLDivElement>("#split-progress-text");
@@ -197,7 +204,7 @@ const diffCopyBtn = document.querySelector<HTMLButtonElement>("#diff-copy");
 const diffCancelBtn = document.querySelector<HTMLButtonElement>("#diff-cancel");
 const diffConfirmBtn = document.querySelector<HTMLButtonElement>("#diff-confirm");
 
-// ---- Paragraph Diff (005) ----
+// ---- Paragraph Diff (006) ----
 const cwDiffText1El = document.querySelector<HTMLTextAreaElement>("#cw-diff-text1");
 const cwDiffText2El = document.querySelector<HTMLTextAreaElement>("#cw-diff-text2");
 const cwDiffCompareBtn = document.querySelector<HTMLButtonElement>("#cw-diff-compare");
@@ -210,6 +217,7 @@ let cwDiffCurrentView: "side" | "merged" | "comprehensive" = "comprehensive";
 let splitProgressSignature = "";
 let activeHelpPopoverEl: HTMLElement | null = null;
 let helpTooltipEl: HTMLDivElement | null = null;
+let pageExportRangeRowCounter = 0;
 
 function setStatus(message: string, isError = false): void {
   if (!statusEl) return;
@@ -280,6 +288,98 @@ function resetSplitProgress(): void {
   splitProgressEl.classList.remove("is-error");
   splitProgressBarEl.style.width = "0%";
   splitProgressTextEl.textContent = "等待开始";
+}
+
+function createPageExportRangeRow(pageFrom = "", pageTo = ""): HTMLDivElement {
+  pageExportRangeRowCounter += 1;
+  const row = document.createElement("div");
+  row.className = "page-export-range-row";
+  row.dataset.pageExportRangeRow = String(pageExportRangeRowCounter);
+  row.innerHTML = `
+    <label>
+      <span>起始页码</span>
+      <input data-page-export-control="1" data-page-export-field="from" type="number" min="1" step="1" placeholder="如 1" value="${pageFrom}" />
+    </label>
+    <label>
+      <span>结束页码</span>
+      <input data-page-export-control="1" data-page-export-field="to" type="number" min="1" step="1" placeholder="如 5" value="${pageTo}" />
+    </label>
+    <button
+      class="button-secondary page-export-range-row__remove"
+      data-page-export-control="1"
+      data-page-export-remove="1"
+      type="button"
+      aria-label="删除这组页码范围"
+      title="删除这组页码范围"
+    >
+      -
+    </button>
+  `;
+  return row;
+}
+
+function listPageExportRangeRows(): HTMLDivElement[] {
+  return Array.from(pageExportRangesEl?.querySelectorAll<HTMLDivElement>(".page-export-range-row") || []);
+}
+
+function refreshPageExportRangeRows(): void {
+  const rows = listPageExportRangeRows();
+  rows.forEach((row, index) => {
+    row.dataset.pageExportIndex = String(index + 1);
+    const removeBtn = row.querySelector<HTMLButtonElement>("[data-page-export-remove='1']");
+    if (removeBtn) {
+      const singleRow = rows.length <= 1;
+      removeBtn.disabled = singleRow || busy;
+      removeBtn.hidden = singleRow;
+    }
+  });
+}
+
+function ensureInitialPageExportRangeRow(): void {
+  if (!pageExportRangesEl || listPageExportRangeRows().length) return;
+  pageExportRangesEl.appendChild(createPageExportRangeRow());
+  refreshPageExportRangeRows();
+}
+
+function addPageExportRangeRow(pageFrom = "", pageTo = ""): void {
+  if (!pageExportRangesEl) return;
+  pageExportRangesEl.appendChild(createPageExportRangeRow(pageFrom, pageTo));
+  refreshPageExportRangeRows();
+}
+
+function removePageExportRangeRow(row: HTMLElement): void {
+  row.remove();
+  if (!listPageExportRangeRows().length) {
+    ensureInitialPageExportRangeRow();
+  }
+  refreshPageExportRangeRows();
+}
+
+function listPageExportDynamicControls(): Array<HTMLInputElement | HTMLButtonElement> {
+  return Array.from(pageExportRangesEl?.querySelectorAll<HTMLInputElement | HTMLButtonElement>("[data-page-export-control='1']") || []);
+}
+
+function collectPageExportRanges(): PageExportRangeSpec[] {
+  const rows = listPageExportRangeRows();
+  if (!rows.length) {
+    throw new Error("请至少添加一组导出页码范围。");
+  }
+
+  return rows.map((row, index) => {
+    const pageFromInput = row.querySelector<HTMLInputElement>("[data-page-export-field='from']");
+    const pageToInput = row.querySelector<HTMLInputElement>("[data-page-export-field='to']");
+    const pageFrom = Number(pageFromInput?.value || 0);
+    const pageTo = Number(pageToInput?.value || 0);
+
+    if (!Number.isFinite(pageFrom) || pageFrom <= 0 || !Number.isFinite(pageTo) || pageTo <= 0) {
+      throw new Error(`请为第 ${index + 1} 组填写有效的导出页码范围。`);
+    }
+    if (pageTo < pageFrom) {
+      throw new Error(`第 ${index + 1} 组的结束页码不能小于起始页码。`);
+    }
+
+    return { pageFrom, pageTo };
+  });
 }
 
 function trimSplitTitle(input: string, limit = 24): string {
@@ -426,7 +526,7 @@ function selectedCapabilityProfile(): CapabilityProfileId {
 
 function selectedStyleTargetType(): StyleTargetType {
   const value = String(styleTargetTypeEl?.value || "other-text");
-  return ["image-paragraph", "image-caption", "table-text", "other-text"].includes(value)
+  return ["image-paragraph", "image-caption", "table-caption-above", "table-text", "other-text"].includes(value)
     ? (value as StyleTargetType)
     : "other-text";
 }
@@ -930,6 +1030,7 @@ function setBusy(isBusy: boolean): void {
     applyStyleRangeBtn,
     applyPunctuationFontRangeBtn,
     splitDocxByHeadingBtn,
+    exportDocxByPageRangeBtn,
     applyStyleNlBtn,
     inspectStyleSelectionBtn,
   ].forEach((btn) => {
@@ -952,15 +1053,21 @@ function setBusy(isBusy: boolean): void {
     splitPageToEl,
     splitHeadingLevelEl,
     splitOutputDirEl,
+    pageExportOutputDirEl,
     styleNlInputEl,
   ].forEach((el) => {
     if (el) el.disabled = isBusy;
+  });
+  if (addPageExportRangeBtn) addPageExportRangeBtn.disabled = isBusy;
+  listPageExportDynamicControls().forEach((el) => {
+    el.disabled = isBusy;
   });
   if (styleInspectNlOutputEl) styleInspectNlOutputEl.readOnly = true;
   if (chatStopBtn) chatStopBtn.disabled = !isBusy || !activeStreamAbortController;
   updateRunToggleButton();
   updateChatActionButtons();
   renderStylePromptTemplateControls();
+  refreshPageExportRangeRows();
 }
 
 function sortStylePromptTemplates(items: StylePromptTemplateRecord[]): StylePromptTemplateRecord[] {
@@ -1354,6 +1461,33 @@ async function splitDocxByHeading(): Promise<void> {
   setStatus(`拆分完成：识别 ${result.totalSections} 个章节，导出 ${result.exported} 个，跳过 ${result.skipped} 个。${suffix}`, result.exported === 0);
 }
 
+async function exportDocxByPageRange(): Promise<void> {
+  const ranges = collectPageExportRanges();
+  const outputDirectory = String(pageExportOutputDirEl?.value || "").trim();
+  if (!outputDirectory) {
+    throw new Error("请先填写导出保存目录。");
+  }
+
+  setStatus(`正在批量导出页码范围（1/${ranges.length}），请稍候...`);
+  await waitForUiPaint();
+  const app = await getApplication();
+  const result =
+    ranges.length === 1
+      ? { total: 1, results: [await exportDocumentByPageRange(app, { ...ranges[0], outputDirectory })] }
+      : await exportDocumentsByPageRanges(app, {
+          ranges,
+          outputDirectory,
+          onProgress: async (progress) => {
+            setStatus(`正在批量导出页码范围（${progress.current}/${progress.total}）：第 ${progress.pageFrom}~${progress.pageTo} 页`);
+            await waitForUiPaint();
+          },
+        });
+  const preview = result.results.slice(0, 3).map((item) => item.filePath.split(/[/\\]/).pop() || item.filePath).join("、");
+  const suffix =
+    result.results.length > 3 ? ` 等 ${result.results.length} 个文件。` : result.results.length ? ` 文件：${preview}。` : "";
+  setStatus(`页码导出完成：共处理 ${result.total} 组，导出 ${result.results.length} 个文件。${suffix}`);
+}
+
 async function applyStyleSetByNaturalLanguage(): Promise<void> {
   const instruction = String(styleNlInputEl?.value || "").trim();
   if (!instruction) {
@@ -1491,7 +1625,7 @@ function openDiffModal(original: string, updated: string): Promise<"confirm" | "
   });
 }
 
-// ---- Paragraph Diff (005) ----
+// ---- Paragraph Diff (006) ----
 
 function escapeHtml(text: string): string {
   return text
@@ -2634,6 +2768,29 @@ splitDocxByHeadingBtn?.addEventListener("click", () => {
     }
   })();
 });
+addPageExportRangeBtn?.addEventListener("click", () => {
+  addPageExportRangeRow();
+});
+pageExportRangesEl?.addEventListener("click", (event) => {
+  const target = event.target as HTMLElement;
+  const removeBtn = target.closest<HTMLButtonElement>("[data-page-export-remove='1']");
+  if (!removeBtn) return;
+  const row = removeBtn.closest<HTMLElement>(".page-export-range-row");
+  if (!row) return;
+  removePageExportRangeRow(row);
+});
+exportDocxByPageRangeBtn?.addEventListener("click", () => {
+  void (async () => {
+    try {
+      setBusy(true);
+      await exportDocxByPageRange();
+    } catch (error) {
+      setStatus((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  })();
+});
 applyStyleNlBtn?.addEventListener("click", () => {
   void (async () => {
     try {
@@ -2884,7 +3041,7 @@ closePanelBtn?.addEventListener("click", () => {
   })();
 });
 
-// ---- Paragraph Diff (005) event listeners ----
+// ---- Paragraph Diff (006) event listeners ----
 cwDiffCompareBtn?.addEventListener("click", handleParagraphDiff);
 cwDiffResultCloseBtn?.addEventListener("click", closeParagraphDiffDialog);
 cwDiffResultCopyBtn?.addEventListener("click", () => {
@@ -2909,6 +3066,7 @@ void (async () => {
     loadStylePromptTemplates();
     renderStylePromptLibrary();
     resetSplitProgress();
+    ensureInitialPageExportRangeRow();
     await syncCurrentDocumentContext(true);
     sessions.forEach(ensureSessionTitle);
     persistAllSessions();

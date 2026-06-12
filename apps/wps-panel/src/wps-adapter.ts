@@ -75,8 +75,13 @@ const WD_ALIGN_PARAGRAPH_DISTRIBUTE = 4;
 const WD_FORMAT_DOCUMENT_DEFAULT = 16;
 const WD_DO_NOT_SAVE_CHANGES = 0;
 const QUOTE_CHARACTERS = new Set(['"', "'", "\u201C", "\u201D", "\u2018", "\u2019", "\u300C", "\u300D", "\u300E", "\u300F", "\uFF02"]);
+const COMMA_CHARACTERS = new Set([",", "\uFF0C"]);
+const COLON_CHARACTERS = new Set([":", "\uFF1A"]);
+const TABLE_CAPTION_PREFIX_PATTERN = /^(?:表|附表)(?:$|[\s0-9A-Za-z一二三四五六七八九十百千零〇甲乙丙丁子丑寅卯上下\-_.()（）、：:])/;
+const ENGLISH_TABLE_CAPTION_PREFIX_PATTERN = /^table(?:$|[\s0-9A-Za-z\-_.()（）、：:])/i;
 
-export type StyleTargetType = "image-paragraph" | "image-caption" | "table-text" | "other-text";
+export type StyleTargetType = "image-paragraph" | "image-caption" | "table-caption-above" | "table-text" | "other-text";
+export type PunctuationTargetType = "quote" | "comma" | "colon";
 
 export interface DocumentStyleOption {
   name: string;
@@ -93,6 +98,13 @@ export interface ApplyQuoteFontByPageRangeOptions {
   pageFrom: number;
   pageTo: number;
   fontName: string;
+}
+
+export interface ApplyPunctuationFontByPageRangeOptions {
+  pageFrom: number;
+  pageTo: number;
+  fontName: string;
+  punctuationTypes: PunctuationTargetType[];
 }
 
 export interface ApplyStyleByPageRangeResult {
@@ -116,6 +128,40 @@ export interface SplitDocumentByHeadingResult {
   files: string[];
 }
 
+export interface PageExportOptions {
+  pageFrom: number;
+  pageTo: number;
+  outputDirectory: string;
+}
+
+export interface PageExportRangeSpec {
+  pageFrom: number;
+  pageTo: number;
+}
+
+export interface PageExportResult {
+  title: string;
+  filePath: string;
+}
+
+export interface BatchPageExportOptions {
+  ranges: PageExportRangeSpec[];
+  outputDirectory: string;
+  onProgress?: (progress: BatchPageExportProgress) => void | Promise<void>;
+}
+
+export interface BatchPageExportProgress {
+  current: number;
+  total: number;
+  pageFrom: number;
+  pageTo: number;
+}
+
+export interface BatchPageExportResult {
+  total: number;
+  results: PageExportResult[];
+}
+
 export interface SplitDocumentProgress {
   phase: "scan" | "export" | "done";
   scanned: number;
@@ -127,8 +173,50 @@ export interface SplitDocumentProgress {
   currentTitle: string;
 }
 
+interface ParagraphRangeEntry {
+  paragraph: any;
+  range: any;
+  start: number;
+}
+
 function normalizeText(value: unknown): string {
   return String(value || "").replace(/\r/g, "").trim();
+}
+
+export function normalizePageExportTitle(value: unknown, fallback = "页码导出"): string {
+  const firstLine = String(value || "")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+  return firstLine || fallback;
+}
+
+export function buildPageExportFileName(title: string): string {
+  const sanitized = normalizeText(title) ? sanitizeFileNamePart(title) : "页码导出";
+  const shortened = sanitized.length > 80 ? sanitized.slice(0, 80).trim() : sanitized;
+  return `${shortened || "页码导出"}.docx`;
+}
+
+export function ensureUniqueDocxFileName(fileName: string, usedFileNames: Set<string>): string {
+  const normalized = normalizeText(fileName) || "页码导出.docx";
+  const extensionMatch = normalized.match(/(\.[^.]+)$/);
+  const extension = extensionMatch ? extensionMatch[1] : "";
+  const baseName = extension ? normalized.slice(0, -extension.length) : normalized;
+  let candidate = normalized;
+  let suffix = 2;
+  while (usedFileNames.has(candidate.toLowerCase())) {
+    candidate = `${baseName}_${suffix}${extension}`;
+    suffix += 1;
+  }
+  usedFileNames.add(candidate.toLowerCase());
+  return candidate;
+}
+
+export function isLikelyTableCaptionText(text: string): boolean {
+  const normalized = normalizeText(text).replace(/\s+/g, " ");
+  if (!normalized) return false;
+  return TABLE_CAPTION_PREFIX_PATTERN.test(normalized) || ENGLISH_TABLE_CAPTION_PREFIX_PATTERN.test(normalized);
 }
 
 const CHINESE_HEADING_LEVEL_MAP: Record<string, number> = {
@@ -245,6 +333,10 @@ async function getRangeText(range: any): Promise<string> {
   return normalizeText(await safeRead(() => range?.Text));
 }
 
+async function getRawRangeText(range: any): Promise<string> {
+  return String((await safeRead(() => range?.Text)) || "");
+}
+
 async function getRangePageNumber(range: any): Promise<number> {
   const infoFn = (await safeRead(() => range?.Information)) ?? (await safeRead(() => range?.information));
   if (typeof infoFn === "function") {
@@ -295,11 +387,27 @@ async function applyStyleToRange(range: any, styleObject: any, styleName: string
   }
 }
 
-function containsQuoteCharacter(text: string): boolean {
-  for (const char of text) {
-    if (QUOTE_CHARACTERS.has(char)) return true;
+function punctuationCharacterSet(type: PunctuationTargetType): Set<string> {
+  if (type === "comma") return COMMA_CHARACTERS;
+  if (type === "colon") return COLON_CHARACTERS;
+  return QUOTE_CHARACTERS;
+}
+
+function normalizePunctuationTypes(types: PunctuationTargetType[]): PunctuationTargetType[] {
+  const allowed = new Set<PunctuationTargetType>(["quote", "comma", "colon"]);
+  return Array.from(new Set(types.filter((type) => allowed.has(type))));
+}
+
+function isSelectedPunctuationCharacter(text: string, punctuationTypes: PunctuationTargetType[]): boolean {
+  return punctuationTypes.some((type) => punctuationCharacterSet(type).has(text));
+}
+
+function collectPunctuationOffsets(text: string, punctuationTypes: PunctuationTargetType[]): number[] {
+  const offsets: number[] = [];
+  for (let offset = 0; offset < text.length; offset += 1) {
+    if (isSelectedPunctuationCharacter(text[offset], punctuationTypes)) offsets.push(offset);
   }
-  return false;
+  return offsets;
 }
 
 async function applyFontNameToRange(range: any, fontName: string): Promise<boolean> {
@@ -313,7 +421,47 @@ async function applyFontNameToRange(range: any, fontName: string): Promise<boole
   return updated;
 }
 
-async function applyQuoteFontToRange(range: any, fontName: string): Promise<{ matched: number; updated: number }> {
+async function setRangeBounds(range: any, start: number, end: number): Promise<boolean> {
+  if (await safeWrite(() => range?.SetRange?.(start, end))) return true;
+  if (await safeWrite(() => range?.setRange?.(start, end))) return true;
+  const startUpdated = await safeWrite(() => {
+    range.Start = start;
+  });
+  const endUpdated = await safeWrite(() => {
+    range.End = end;
+  });
+  return startUpdated && endUpdated;
+}
+
+async function createSingleCharacterRange(activeDocument: any, parentRange: any, offset: number): Promise<any | null> {
+  const rawStart = await safeRead(() => parentRange?.Start);
+  if (rawStart === null || rawStart === undefined || rawStart === "") return null;
+  const start = Number(rawStart);
+  if (!Number.isFinite(start) || start < 0) return null;
+  const characterStart = start + offset;
+  const characterEnd = characterStart + 1;
+  return (
+    (await safeRead(() => activeDocument?.Range?.(characterStart, characterEnd))) ??
+    (await safeRead(() => activeDocument?.range?.(characterStart, characterEnd))) ??
+    null
+  );
+}
+
+async function createReusableRange(parentRange: any): Promise<any | null> {
+  return (
+    (await safeRead(() => parentRange?.Duplicate)) ??
+    (await safeRead(() => parentRange?.duplicate)) ??
+    (await safeRead(() => parentRange?.Duplicate?.())) ??
+    (await safeRead(() => parentRange?.duplicate?.())) ??
+    null
+  );
+}
+
+async function applyPunctuationFontToRangeByCharacters(
+  range: any,
+  fontName: string,
+  punctuationTypes: PunctuationTargetType[]
+): Promise<{ matched: number; updated: number }> {
   const characters = (await safeRead(() => range?.Characters)) ?? (await safeRead(() => range?.characters));
   const count = Number((await safeRead(() => characters?.Count)) || (await safeRead(() => characters?.count)) || 0);
   if (!characters || !Number.isFinite(count) || count <= 0) {
@@ -329,9 +477,47 @@ async function applyQuoteFontToRange(range: any, fontName: string): Promise<{ ma
       (await safeRead(() => characters?.[index]));
     if (!characterRange) continue;
     const text = String((await safeRead(() => characterRange?.Text)) || "");
-    if (!QUOTE_CHARACTERS.has(text)) continue;
+    if (!isSelectedPunctuationCharacter(text, punctuationTypes)) continue;
     matched += 1;
     if (await applyFontNameToRange(characterRange, fontName)) updated += 1;
+  }
+  return { matched, updated };
+}
+
+async function applyPunctuationFontToRange(
+  activeDocument: any,
+  range: any,
+  text: string,
+  fontName: string,
+  punctuationTypes: PunctuationTargetType[]
+): Promise<{ matched: number; updated: number }> {
+  const punctuationOffsets = collectPunctuationOffsets(text, punctuationTypes);
+  if (!punctuationOffsets.length) return { matched: 0, updated: 0 };
+
+  const rawRangeStart = await safeRead(() => range?.Start);
+  if (rawRangeStart === null || rawRangeStart === undefined || rawRangeStart === "") {
+    return applyPunctuationFontToRangeByCharacters(range, fontName, punctuationTypes);
+  }
+  const rangeStart = Number(rawRangeStart);
+  if (!Number.isFinite(rangeStart) || rangeStart < 0) {
+    return applyPunctuationFontToRangeByCharacters(range, fontName, punctuationTypes);
+  }
+
+  let matched = 0;
+  let updated = 0;
+  const reusableRange = await createReusableRange(range);
+  for (const offset of punctuationOffsets) {
+    const characterStart = rangeStart + offset;
+    const characterEnd = characterStart + 1;
+    let punctuationRange: any | null = null;
+    if (reusableRange && await setRangeBounds(reusableRange, characterStart, characterEnd)) {
+      punctuationRange = reusableRange;
+    } else {
+      punctuationRange = await createSingleCharacterRange(activeDocument, range, offset);
+    }
+    if (!punctuationRange) continue;
+    matched += 1;
+    if (await applyFontNameToRange(punctuationRange, fontName)) updated += 1;
   }
   return { matched, updated };
 }
@@ -1042,6 +1228,9 @@ export async function applyStyleByPageRange(
   if (options.targetType === "image-caption") {
     return applyStyleToImageCaptions(activeDocument, styleObject, options.styleName, options.pageFrom, options.pageTo);
   }
+  if (options.targetType === "table-caption-above") {
+    return applyStyleToTableCaptions(activeDocument, styleObject, options.styleName, options.pageFrom, options.pageTo);
+  }
   if (options.targetType === "table-text") {
     return applyStyleToTableText(activeDocument, styleObject, options.styleName, options.pageFrom, options.pageTo);
   }
@@ -1052,10 +1241,27 @@ export async function applyQuoteFontByPageRange(
   app: any,
   options: ApplyQuoteFontByPageRangeOptions
 ): Promise<ApplyStyleByPageRangeResult> {
+  return applyPunctuationFontByPageRange(app, {
+    pageFrom: options.pageFrom,
+    pageTo: options.pageTo,
+    fontName: options.fontName,
+    punctuationTypes: ["quote"],
+  });
+}
+
+export async function applyPunctuationFontByPageRange(
+  app: any,
+  options: ApplyPunctuationFontByPageRangeOptions
+): Promise<ApplyStyleByPageRangeResult> {
   const activeDocument = await getDocument(app);
   const fontName = normalizeText(options.fontName);
   if (!fontName) {
-    throw new Error("引号字体名称不能为空。");
+    throw new Error("字体名称不能为空。");
+  }
+
+  const punctuationTypes = normalizePunctuationTypes(options.punctuationTypes);
+  if (!punctuationTypes.length) {
+    throw new Error("至少需要选择一种标点。");
   }
 
   const paragraphsRoot = await safeRead(() => activeDocument?.Paragraphs);
@@ -1076,12 +1282,13 @@ export async function applyQuoteFontByPageRange(
     const paragraphRange = await safeRead(() => paragraph?.Range);
     if (!paragraphRange) continue;
     const page = await getRangePageNumber(paragraphRange);
-    if (page < options.pageFrom || page > options.pageTo) continue;
+    if (page > options.pageTo) break;
+    if (page < options.pageFrom) continue;
 
-    const text = await getRangeText(paragraphRange);
-    if (!text || !containsQuoteCharacter(text)) continue;
+    const text = await getRawRangeText(paragraphRange);
+    if (!text) continue;
 
-    const result = await applyQuoteFontToRange(paragraphRange, fontName);
+    const result = await applyPunctuationFontToRange(activeDocument, paragraphRange, text, fontName, punctuationTypes);
     matched += result.matched;
     updated += result.updated;
   }
@@ -1223,6 +1430,114 @@ async function applyStyleToImageCaptions(
     appliedCaptionStarts.add(nextStart);
     matched += 1;
     if (await applyStyleToRange(nextRange, styleObject, styleName)) updated += 1;
+  }
+
+  return { matched, updated, skipped: matched - updated };
+}
+
+async function collectDocumentParagraphEntries(activeDocument: any): Promise<ParagraphRangeEntry[]> {
+  const paragraphsRoot = await safeRead(() => activeDocument?.Paragraphs);
+  const count = Number((await safeRead(() => paragraphsRoot?.Count)) || 0);
+  if (!paragraphsRoot || !Number.isFinite(count) || count <= 0) {
+    return [];
+  }
+
+  const entries: ParagraphRangeEntry[] = [];
+  for (let index = 1; index <= count; index += 1) {
+    const paragraph =
+      (await safeRead(() => paragraphsRoot?.Item?.(index))) ??
+      (await safeRead(() => paragraphsRoot?.item?.(index))) ??
+      (await safeRead(() => paragraphsRoot?.[index]));
+    if (!paragraph) continue;
+
+    const range = await safeRead(() => paragraph?.Range);
+    const start = Number((await safeRead(() => range?.Start)) || 0);
+    if (!range || !start) continue;
+
+    entries.push({ paragraph, range, start });
+  }
+  return entries;
+}
+
+async function findNearestTableCaptionRange(
+  paragraphEntries: ParagraphRangeEntry[],
+  tableFirstParagraphStart: number,
+  pageFrom: number,
+  pageTo: number,
+  tableStartPage: number
+): Promise<any | null> {
+  const tableParagraphIndex = paragraphEntries.findIndex((entry) => entry.start === tableFirstParagraphStart);
+  if (tableParagraphIndex <= 0) {
+    return null;
+  }
+
+  for (let index = tableParagraphIndex - 1; index >= 0; index -= 1) {
+    const candidate = paragraphEntries[index];
+    if (await isRangeInTable(candidate.range)) continue;
+
+    const text = await getRangeText(candidate.range);
+    if (!text) continue;
+
+    const page = await getRangePageNumber(candidate.range);
+    if (page < pageFrom || page > pageTo) return null;
+    if (tableStartPage > 0 && page !== tableStartPage) return null;
+    if (await isHeadingParagraph(candidate.paragraph, candidate.range)) return null;
+    return isLikelyTableCaptionText(text) ? candidate.range : null;
+  }
+
+  return null;
+}
+
+async function applyStyleToTableCaptions(
+  activeDocument: any,
+  styleObject: any,
+  styleName: string,
+  pageFrom: number,
+  pageTo: number
+): Promise<ApplyStyleByPageRangeResult> {
+  const paragraphEntries = await collectDocumentParagraphEntries(activeDocument);
+  if (!paragraphEntries.length) {
+    return { matched: 0, updated: 0, skipped: 0 };
+  }
+
+  let matched = 0;
+  let updated = 0;
+  let sawInRangeTable = false;
+  const appliedCaptionStarts = new Set<number>();
+  const tables = await collectIndexedItems(activeDocument?.Tables);
+
+  for (const table of tables) {
+    const tableRange = (await safeRead(() => table?.Range)) ?? (await safeRead(() => table?.range));
+    if (!tableRange) continue;
+
+    const tableStartPage = await getRangeStartPageNumber(tableRange);
+    const tableEndPage = await getRangePageNumber(tableRange);
+    const hasTablePageInfo = tableStartPage > 0 && tableEndPage > 0;
+    if (hasTablePageInfo && tableEndPage < pageFrom) continue;
+    if (hasTablePageInfo && tableStartPage > pageTo) {
+      if (sawInRangeTable) break;
+      continue;
+    }
+    if (hasTablePageInfo) sawInRangeTable = true;
+
+    const tableParagraphs = await getParagraphCollection(tableRange);
+    const firstTableRange = tableParagraphs?.length ? await safeRead(() => tableParagraphs[0]?.Range) : null;
+    const firstTableStart = Number((await safeRead(() => firstTableRange?.Start)) || 0);
+    if (!firstTableStart) continue;
+
+    const captionRange = await findNearestTableCaptionRange(
+      paragraphEntries,
+      firstTableStart,
+      pageFrom,
+      pageTo,
+      tableStartPage
+    );
+    const captionStart = Number((await safeRead(() => captionRange?.Start)) || 0);
+    if (!captionRange || !captionStart || appliedCaptionStarts.has(captionStart)) continue;
+
+    appliedCaptionStarts.add(captionStart);
+    matched += 1;
+    if (await applyStyleToRange(captionRange, styleObject, styleName)) updated += 1;
   }
 
   return { matched, updated, skipped: matched - updated };
@@ -1447,6 +1762,31 @@ async function saveDocumentAsDocx(document: any, filePath: string): Promise<bool
   return false;
 }
 
+async function setDocumentTitle(document: any, title: string): Promise<void> {
+  if (!title) return;
+  await safeWrite(() => {
+    document.Title = title;
+  });
+
+  const builtInProperties =
+    (await safeRead(() => document?.BuiltInDocumentProperties)) ??
+    (await safeRead(() => document?.builtInDocumentProperties));
+  if (!builtInProperties) return;
+
+  const titleProperty =
+    (await safeRead(() => builtInProperties?.Item?.("Title"))) ??
+    (await safeRead(() => builtInProperties?.item?.("Title"))) ??
+    (await safeRead(() => builtInProperties?.["Title"]));
+  if (!titleProperty) return;
+
+  await safeWrite(() => {
+    titleProperty.Value = title;
+  });
+  await safeWrite(() => {
+    titleProperty.value = title;
+  });
+}
+
 async function getDocumentContentRange(document: any): Promise<any | null> {
   return (
     (await safeRead(() => document?.Content)) ??
@@ -1494,6 +1834,179 @@ async function writePlainTextToDocument(text: string, targetDocument: any): Prom
   return safeWrite(() => {
     (contentRange as { Text?: string }).Text = text;
   });
+}
+
+interface PageExportPayload {
+  title: string;
+  pageRange: any;
+}
+
+async function collectPageExportPayload(activeDocument: any, options: PageExportRangeSpec): Promise<PageExportPayload> {
+  const pageFrom = Number(options.pageFrom);
+  const pageTo = Number(options.pageTo);
+
+  if (!Number.isFinite(pageFrom) || pageFrom <= 0 || !Number.isFinite(pageTo) || pageTo <= 0) {
+    throw new Error("页码范围无效。");
+  }
+  if (pageTo < pageFrom) {
+    throw new Error("结束页码不能小于起始页码。");
+  }
+  const contentRange =
+    (await safeRead(() => activeDocument?.Content)) ??
+    (await safeRead(() => activeDocument?.Range?.())) ??
+    (await safeRead(() => activeDocument?.range?.()));
+  const documentEnd = Number((await safeRead(() => contentRange?.End)) || 0);
+  if (!Number.isFinite(documentEnd) || documentEnd <= 0) {
+    throw new Error("无法读取当前文档内容范围。");
+  }
+
+  const paragraphsRoot = await safeRead(() => activeDocument?.Paragraphs);
+  const paragraphCount = Number((await safeRead(() => paragraphsRoot?.Count)) || 0);
+  if (!paragraphsRoot || !Number.isFinite(paragraphCount) || paragraphCount <= 0) {
+    throw new Error("当前文档没有可导出的段落内容。");
+  }
+
+  let exportStart = -1;
+  let exportEnd = documentEnd;
+  let title = "";
+  let enteredRange = false;
+
+  for (let index = 1; index <= paragraphCount; index += 1) {
+    const paragraph =
+      (await safeRead(() => paragraphsRoot?.Item?.(index))) ??
+      (await safeRead(() => paragraphsRoot?.item?.(index))) ??
+      (await safeRead(() => paragraphsRoot?.[index]));
+    if (!paragraph) continue;
+
+    const paragraphRange = await safeRead(() => paragraph?.Range);
+    const start = Number((await safeRead(() => paragraphRange?.Start)) || 0);
+    if (!paragraphRange || !Number.isFinite(start) || start < 0 || start >= documentEnd) continue;
+
+    let startPage = await getRangeStartPageNumber(paragraphRange);
+    if (startPage <= 0) startPage = await getRangePageNumber(paragraphRange);
+    const endPage = await getRangePageNumber(paragraphRange);
+    const effectiveStartPage = startPage > 0 ? startPage : endPage;
+    const effectiveEndPage = endPage > 0 ? endPage : effectiveStartPage;
+    if (effectiveStartPage <= 0 && effectiveEndPage <= 0) continue;
+
+    if (enteredRange && effectiveStartPage > pageTo) {
+      exportEnd = Math.min(exportEnd, start);
+      break;
+    }
+    if (!enteredRange) {
+      if (effectiveEndPage < pageFrom) continue;
+      if (effectiveStartPage > pageTo) break;
+      exportStart = start;
+      enteredRange = true;
+    }
+
+    if (!title && effectiveEndPage >= pageFrom && effectiveStartPage <= pageTo) {
+      title = normalizePageExportTitle(await getRawRangeText(paragraphRange), "");
+    }
+  }
+
+  if (!enteredRange || exportStart < 0 || exportEnd <= exportStart) {
+    throw new Error(`在第 ${pageFrom}~${pageTo} 页内未找到可导出的内容。`);
+  }
+
+  title = title || normalizePageExportTitle("", `第${pageFrom}页导出`);
+  const pageRange =
+    (await safeRead(() => activeDocument?.Range?.(exportStart, exportEnd))) ??
+    (await safeRead(() => activeDocument?.range?.(exportStart, exportEnd)));
+  if (!pageRange) {
+    throw new Error("无法创建页码范围内容。");
+  }
+
+  return { title, pageRange };
+}
+
+async function savePageExportRangeAsDocument(app: any, payload: PageExportPayload, filePath: string): Promise<PageExportResult> {
+  const { pageRange, title } = payload;
+
+  const copiedToClipboard = (await safeWrite(() => pageRange?.Copy?.())) || (await safeWrite(() => pageRange?.copy?.()));
+  const newDocument =
+    (await safeRead(() => app?.Documents?.Add?.())) ??
+    (await safeRead(() => app?.documents?.add?.()));
+  if (!newDocument) {
+    throw new Error("当前 WPS 环境不支持创建新文档，无法执行页码导出。");
+  }
+
+  try {
+    const copied = copiedToClipboard ? await pasteClipboardToDocument(newDocument) : false;
+    if (!copied) {
+      const text = String((await safeRead(() => pageRange?.Text)) || "");
+      if (!(await writePlainTextToDocument(text, newDocument))) {
+        throw new Error("页码范围内容写入新文档失败。");
+      }
+    }
+
+    await setDocumentTitle(newDocument, title);
+    const saved = await saveDocumentAsDocx(newDocument, filePath);
+    if (!saved) {
+      throw new Error(`保存失败：${filePath}`);
+    }
+  } finally {
+    await closeDocumentSilently(newDocument);
+  }
+
+  return { title, filePath };
+}
+
+export async function exportDocumentByPageRange(app: any, options: PageExportOptions): Promise<PageExportResult> {
+  const outputDirectory = normalizeOutputDirectory(String(options.outputDirectory || ""));
+  if (!outputDirectory) {
+    throw new Error("导出目录不能为空。");
+  }
+
+  const activeDocument = await getDocument(app);
+  const payload = await collectPageExportPayload(activeDocument, options);
+  const filePath = buildPathUnderDirectory(outputDirectory, buildPageExportFileName(payload.title));
+  return savePageExportRangeAsDocument(app, payload, filePath);
+}
+
+export async function exportDocumentsByPageRanges(app: any, options: BatchPageExportOptions): Promise<BatchPageExportResult> {
+  const outputDirectory = normalizeOutputDirectory(String(options.outputDirectory || ""));
+  if (!outputDirectory) {
+    throw new Error("导出目录不能为空。");
+  }
+
+  const ranges = Array.isArray(options.ranges) ? options.ranges : [];
+  if (!ranges.length) {
+    throw new Error("至少需要一组页码范围。");
+  }
+
+  const activeDocument = await getDocument(app);
+  const usedFileNames = new Set<string>();
+  const results: PageExportResult[] = [];
+
+  for (let index = 0; index < ranges.length; index += 1) {
+    const range = ranges[index];
+    try {
+      await options.onProgress?.({
+        current: index + 1,
+        total: ranges.length,
+        pageFrom: range.pageFrom,
+        pageTo: range.pageTo,
+      });
+    } catch {
+      // Ignore UI callback errors to avoid interrupting export.
+    }
+
+    try {
+      const payload = await collectPageExportPayload(activeDocument, range);
+      const uniqueFileName = ensureUniqueDocxFileName(buildPageExportFileName(payload.title), usedFileNames);
+      const filePath = buildPathUnderDirectory(outputDirectory, uniqueFileName);
+      results.push(await savePageExportRangeAsDocument(app, payload, filePath));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`第 ${index + 1} 组（第 ${range.pageFrom}~${range.pageTo} 页）导出失败：${message}`);
+    }
+  }
+
+  return {
+    total: ranges.length,
+    results,
+  };
 }
 
 export async function splitDocumentByHeadingRange(
