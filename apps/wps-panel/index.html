@@ -103,6 +103,14 @@
               <span class="style-workflow-nav__num">06</span>
               <span class="style-workflow-nav__label">Diff</span>
             </a>
+            <a class="style-workflow-nav__item" href="#style-tool-batch-delete">
+              <span class="style-workflow-nav__num">07</span>
+              <span class="style-workflow-nav__label">批量删除</span>
+            </a>
+            <a class="style-workflow-nav__item" href="#style-tool-crossref">
+              <span class="style-workflow-nav__num">08</span>
+              <span class="style-workflow-nav__label">交叉引用</span>
+            </a>
           </aside>
           <div class="style-workflow-panels">
           <section id="style-tool-inspect" class="style-tool style-tool--inspect" aria-label="样式读取与描述">
@@ -378,6 +386,69 @@
                 <button id="cw-diff-compare" type="button">对比</button>
               </div>
             </div>
+          </section>
+          <section id="style-tool-batch-delete" class="style-tool" aria-label="按页码批量删除">
+            <div class="tool-card__head">
+              <span class="tool-card__step">07</span>
+              <div>
+                <div class="style-tool__title-row">
+                  <div class="style-tool__sub-title">批量删除</div>
+                  <span class="help-popover" tabindex="0" aria-label="功能说明">
+                    ?
+                    <span class="help-popover__bubble" role="tooltip">输入起始页码和结束页码，执行后会一键删除该页码范围内的全部内容。</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="style-tool__grid">
+              <label>
+                <span>起始页码</span>
+                <input id="delete-page-from" type="number" min="1" step="1" placeholder="如 10" />
+              </label>
+              <label>
+                <span>结束页码</span>
+                <input id="delete-page-to" type="number" min="1" step="1" placeholder="如 20" />
+              </label>
+            </div>
+            <div class="style-tool__actions style-tool__actions--end">
+              <button id="delete-content-by-page-range" class="button-danger" type="button">执行删除</button>
+            </div>
+          </section>
+          <section id="style-tool-crossref" class="style-tool" aria-label="交叉引用">
+            <div class="tool-card__head">
+              <span class="tool-card__step">08</span>
+              <div>
+                <div class="style-tool__title-row">
+                  <div class="style-tool__sub-title">交叉引用</div>
+                  <span class="help-popover" tabindex="0" aria-label="功能说明">
+                    ?
+                    <span class="help-popover__bubble" role="tooltip">先选“图”或“表”，扫描当前文档中对应题注，再选序号把仅包含图号/表号的 REF 域插入到光标处。</span>
+                  </span>
+                </div>
+              </div>
+            </div>
+            <div class="style-tool__grid style-tool__grid--crossref">
+              <label class="crossref-search-field">
+                <span>搜索题注</span>
+                <input id="crossref-search" type="search" placeholder="输入图号、表号或题名关键字" />
+              </label>
+              <label>
+                <span>引用类型</span>
+                <select id="crossref-kind">
+                  <option value="figure">图</option>
+                  <option value="table">表</option>
+                </select>
+              </label>
+              <label class="crossref-list-field">
+                <span>题注列表</span>
+                <select id="crossref-list" class="crossref-list" size="8" aria-label="题注列表"></select>
+              </label>
+            </div>
+            <div class="style-tool__actions">
+              <button id="crossref-scan" class="button-secondary" type="button">扫描题注</button>
+              <button id="crossref-insert" type="button">插入引用</button>
+            </div>
+            <div id="crossref-status" class="crossref-status">请选择引用类型，然后扫描题注。</div>
           </section>
           </div>
         </div>

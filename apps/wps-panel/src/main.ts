@@ -32,9 +32,11 @@ import {
   applyNaturalLanguageStyleSet,
   applyPunctuationFontByPageRange,
   applyStyleByPageRange,
+  deleteContentByPageRange,
   describeSelectionStyle,
   exportDocumentByPageRange,
   exportDocumentsByPageRanges,
+  insertCaptionReferenceOption,
   getCurrentParagraphText,
   getDocumentIdentity,
   getDocumentText,
@@ -44,14 +46,18 @@ import {
   insertAfterSelection,
   insertImageAfterSelection,
   insertTableAfterSelection,
+  listAllCaptionReferenceOptions,
   listAvailableStyles,
   replaceSelection,
   replaceSelectionWithTable,
   splitDocumentByHeadingRange,
+  type CaptionReferenceOption,
+  type CaptionReferenceType,
   type PageExportRangeSpec,
   type PunctuationTargetType,
   type SplitDocumentProgress,
   type StyleTargetType,
+  normalizeCaptionReferenceSearchText,
 } from "./wps-adapter";
 import type { SelectionStyleDescriptionResult } from "./style-inspector-types";
 import type { ChatFileAttachment, ChatImageAttachment, CodexChatMode, CodexReasoningEffort, CodexRunRequest } from "../../../shared/types";
@@ -98,6 +104,13 @@ let stylePromptTemplates: StylePromptTemplateRecord[] = [];
 let activeStylePromptTemplateId = "";
 let stylePromptEditorMode: "create" | "update" = "create";
 let stylePromptEditorTargetTemplateId = "";
+let crossReferenceCandidates: CaptionReferenceOption[] = [];
+let crossReferenceCache: Record<CaptionReferenceType, CaptionReferenceOption[]> = { figure: [], table: [] };
+let crossReferenceVisibleCandidates: Array<{ candidate: CaptionReferenceOption; candidateIndex: number }> = [];
+let crossReferenceSelectedIndex = 0;
+let crossReferenceRefreshToken = 0;
+let crossReferenceSearchQuery = "";
+let crossReferenceScanned = false;
 
 const statusEl = document.querySelector<HTMLDivElement>("#status");
 const modeEl = document.querySelector<HTMLSelectElement>("#mode");
@@ -179,6 +192,9 @@ const pageExportRangesEl = document.querySelector<HTMLDivElement>("#page-export-
 const addPageExportRangeBtn = document.querySelector<HTMLButtonElement>("#add-page-export-range");
 const pageExportOutputDirEl = document.querySelector<HTMLInputElement>("#page-export-output-dir");
 const exportDocxByPageRangeBtn = document.querySelector<HTMLButtonElement>("#export-docx-by-page-range");
+const deletePageFromEl = document.querySelector<HTMLInputElement>("#delete-page-from");
+const deletePageToEl = document.querySelector<HTMLInputElement>("#delete-page-to");
+const deleteContentByPageRangeBtn = document.querySelector<HTMLButtonElement>("#delete-content-by-page-range");
 const splitProgressEl = document.querySelector<HTMLDivElement>("#split-progress");
 const splitProgressBarEl = document.querySelector<HTMLDivElement>("#split-progress-bar");
 const splitProgressTextEl = document.querySelector<HTMLDivElement>("#split-progress-text");
@@ -197,6 +213,12 @@ const stylePromptEditorNameEl = document.querySelector<HTMLInputElement>("#style
 const stylePromptEditorContentEl = document.querySelector<HTMLTextAreaElement>("#style-prompt-editor-content");
 const stylePromptEditorCancelBtn = document.querySelector<HTMLButtonElement>("#style-prompt-editor-cancel");
 const stylePromptEditorConfirmBtn = document.querySelector<HTMLButtonElement>("#style-prompt-editor-confirm");
+const crossReferenceSearchEl = document.querySelector<HTMLInputElement>("#crossref-search");
+const crossReferenceKindEl = document.querySelector<HTMLSelectElement>("#crossref-kind");
+const crossReferenceListEl = document.querySelector<HTMLSelectElement>("#crossref-list");
+const crossReferenceScanBtn = document.querySelector<HTMLButtonElement>("#crossref-scan");
+const crossReferenceInsertBtn = document.querySelector<HTMLButtonElement>("#crossref-insert");
+const crossReferenceStatusEl = document.querySelector<HTMLDivElement>("#crossref-status");
 const diffModalEl = document.querySelector<HTMLDivElement>("#diff-modal");
 const diffContentEl = document.querySelector<HTMLDivElement>("#diff-content");
 const diffDescriptionEl = document.querySelector<HTMLParagraphElement>("#diff-description");
@@ -692,11 +714,18 @@ function showStyleToolPage(): void {
   closeSessionContextMenu();
   renderCurrentDocumentLabel();
   renderStylePromptLibrary();
+  crossReferenceCandidates = [];
+  renderCrossReferenceOptions(0);
+  updateCrossReferenceControls();
   if (chatPageEl) chatPageEl.hidden = true;
   if (sessionManagerPageEl) sessionManagerPageEl.hidden = true;
   if (styleToolPageEl) styleToolPageEl.hidden = false;
   if (manageChatSessionsBtn) manageChatSessionsBtn.classList.remove("is-active");
   if (openStyleToolBtn) openStyleToolBtn.classList.add("is-active");
+  void refreshCrossReferenceOptions().catch((error) => {
+    const message = (error as Error).message;
+    setCrossReferenceStatus(message, true);
+  });
 }
 
 function setMultiSelectMode(next: boolean): void {
@@ -1031,8 +1060,11 @@ function setBusy(isBusy: boolean): void {
     applyPunctuationFontRangeBtn,
     splitDocxByHeadingBtn,
     exportDocxByPageRangeBtn,
+    deleteContentByPageRangeBtn,
     applyStyleNlBtn,
     inspectStyleSelectionBtn,
+    crossReferenceScanBtn,
+    crossReferenceInsertBtn,
   ].forEach((btn) => {
     if (btn) btn.disabled = isBusy;
   });
@@ -1054,7 +1086,12 @@ function setBusy(isBusy: boolean): void {
     splitHeadingLevelEl,
     splitOutputDirEl,
     pageExportOutputDirEl,
+    deletePageFromEl,
+    deletePageToEl,
     styleNlInputEl,
+    crossReferenceSearchEl,
+    crossReferenceKindEl,
+    crossReferenceListEl,
   ].forEach((el) => {
     if (el) el.disabled = isBusy;
   });
@@ -1067,6 +1104,7 @@ function setBusy(isBusy: boolean): void {
   updateRunToggleButton();
   updateChatActionButtons();
   renderStylePromptTemplateControls();
+  updateCrossReferenceControls();
   refreshPageExportRangeRows();
 }
 
@@ -1171,6 +1209,159 @@ function renderStylePromptTemplateControls(): void {
 function renderStylePromptLibrary(): void {
   renderStylePromptTemplateOptions();
   renderStylePromptTemplateControls();
+}
+
+function selectedCrossReferenceKind(): CaptionReferenceType {
+  const value = String(crossReferenceKindEl?.value || "figure");
+  return value === "table" ? "table" : "figure";
+}
+
+function crossReferenceKindLabel(kind: CaptionReferenceType): string {
+  return kind === "table" ? "表" : "图";
+}
+
+function selectedCrossReferenceSearchQuery(): string {
+  crossReferenceSearchQuery = String(crossReferenceSearchEl?.value ?? crossReferenceSearchQuery);
+  return normalizeCaptionReferenceSearchText(crossReferenceSearchQuery);
+}
+
+function currentCrossReferenceCandidates(): CaptionReferenceOption[] {
+  return crossReferenceCache[selectedCrossReferenceKind()] || [];
+}
+
+function setCrossReferenceStatus(message: string, isError = false): void {
+  if (!crossReferenceStatusEl) return;
+  crossReferenceStatusEl.textContent = message;
+  crossReferenceStatusEl.classList.toggle("is-error", isError);
+  setStatus(message, isError);
+}
+
+function updateCrossReferenceControls(): void {
+  const disabledByBusy = busy;
+  const hasVisibleCandidates = crossReferenceVisibleCandidates.length > 0;
+  if (crossReferenceKindEl) crossReferenceKindEl.disabled = disabledByBusy;
+  if (crossReferenceSearchEl) crossReferenceSearchEl.disabled = disabledByBusy;
+  if (crossReferenceListEl) crossReferenceListEl.disabled = disabledByBusy || !hasVisibleCandidates;
+  if (crossReferenceScanBtn) crossReferenceScanBtn.disabled = disabledByBusy;
+  if (crossReferenceInsertBtn) crossReferenceInsertBtn.disabled = disabledByBusy || !hasVisibleCandidates;
+}
+
+function renderCrossReferenceOptions(selectedIndex = 0): void {
+  if (!crossReferenceListEl) return;
+
+  const query = selectedCrossReferenceSearchQuery();
+  const kind = selectedCrossReferenceKind();
+  crossReferenceCandidates = currentCrossReferenceCandidates();
+  crossReferenceVisibleCandidates = crossReferenceCandidates
+    .map((candidate, candidateIndex) => ({ candidate, candidateIndex }))
+    .filter(({ candidate }) => !query || candidate.searchText.includes(query));
+
+  crossReferenceListEl.innerHTML = "";
+  if (!crossReferenceCandidates.length) {
+    const emptyOption = document.createElement("option");
+    emptyOption.value = "";
+    emptyOption.textContent = crossReferenceScanned ? `无${crossReferenceKindLabel(kind)}题注` : "先扫描题注";
+    emptyOption.disabled = true;
+    crossReferenceListEl.appendChild(emptyOption);
+    crossReferenceListEl.selectedIndex = 0;
+    crossReferenceSelectedIndex = 0;
+    setCrossReferenceStatus(
+      crossReferenceScanned
+        ? `已扫描文档，未找到${crossReferenceKindLabel(kind)}题注。`
+        : "请选择引用类型，然后扫描题注。",
+      crossReferenceScanned
+    );
+    updateCrossReferenceControls();
+    return;
+  }
+
+  if (!crossReferenceVisibleCandidates.length) {
+    const emptyOption = document.createElement("option");
+    emptyOption.value = "";
+    emptyOption.textContent = "无匹配题注";
+    emptyOption.disabled = true;
+    crossReferenceListEl.appendChild(emptyOption);
+    crossReferenceListEl.selectedIndex = 0;
+    crossReferenceSelectedIndex = 0;
+    const queryLabel = crossReferenceSearchEl?.value?.trim() || query;
+    setCrossReferenceStatus(`在${kind}题注中未找到匹配“${queryLabel}”的项。`, true);
+    updateCrossReferenceControls();
+    return;
+  }
+
+  crossReferenceVisibleCandidates.forEach((item) => {
+    const option = document.createElement("option");
+    option.value = String(item.candidateIndex);
+    option.textContent = `${item.candidate.index}. ${item.candidate.captionText}`;
+    option.title = `${item.candidate.bookmarkName} · ${item.candidate.referenceText}`;
+    crossReferenceListEl.appendChild(option);
+  });
+
+  const resolvedIndex = crossReferenceVisibleCandidates.findIndex((item) => item.candidateIndex === selectedIndex);
+  const selectedVisibleIndex = resolvedIndex >= 0 ? resolvedIndex : 0;
+  const selectedVisibleCandidate = crossReferenceVisibleCandidates[selectedVisibleIndex];
+  crossReferenceListEl.selectedIndex = selectedVisibleIndex;
+  crossReferenceListEl.value = String(selectedVisibleCandidate.candidateIndex);
+  crossReferenceSelectedIndex = selectedVisibleCandidate.candidateIndex;
+  if (query) {
+    setCrossReferenceStatus(
+      `已筛选出 ${crossReferenceVisibleCandidates.length}/${crossReferenceCandidates.length} 条${crossReferenceKindLabel(kind)}题注，选中后点击“插入引用”。`
+    );
+  } else {
+    setCrossReferenceStatus(`已找到 ${crossReferenceCandidates.length} 条${crossReferenceKindLabel(kind)}题注，选中后点击“插入引用”。`);
+  }
+  updateCrossReferenceControls();
+}
+
+async function refreshCrossReferenceOptions(preserveSelection = false): Promise<void> {
+  const requestedToken = crossReferenceRefreshToken + 1;
+  crossReferenceRefreshToken = requestedToken;
+  setCrossReferenceStatus("正在扫描图和表题注...");
+
+  const app = await getApplication();
+  const options = await listAllCaptionReferenceOptions(app);
+  if (requestedToken !== crossReferenceRefreshToken) return;
+
+  crossReferenceCache = {
+    figure: options.figures,
+    table: options.tables,
+  };
+  crossReferenceScanned = true;
+  crossReferenceCandidates = currentCrossReferenceCandidates();
+  const nextIndex = preserveSelection ? crossReferenceSelectedIndex : 0;
+  renderCrossReferenceOptions(nextIndex);
+
+  if (!options.figures.length && !options.tables.length) {
+    const emptyMessage = "未找到以“图”或“表”开头的题注段落。";
+    setCrossReferenceStatus(emptyMessage, true);
+  }
+}
+
+async function insertSelectedCrossReference(): Promise<void> {
+  if (!crossReferenceCandidates.length) {
+    throw new Error("请先扫描题注。");
+  }
+  if (!crossReferenceVisibleCandidates.length) {
+    throw new Error("当前搜索条件下没有可插入的题注，请先调整搜索词。");
+  }
+
+  const rawIndex = Number(crossReferenceListEl?.value || crossReferenceSelectedIndex);
+  const selectedIndex = Number.isFinite(rawIndex) ? rawIndex : crossReferenceSelectedIndex;
+  const selected = crossReferenceCandidates[selectedIndex];
+  if (!selected) {
+    throw new Error("请先选择一个题注。");
+  }
+
+  const app = await getApplication();
+  const result = await insertCaptionReferenceOption(app, selected);
+  crossReferenceCandidates[selectedIndex] = result.option;
+  renderCrossReferenceOptions(selectedIndex);
+
+  const kindLabel = crossReferenceKindLabel(result.option.kind);
+  const bookmarkHint = result.bookmarkCreated ? "已自动补齐书签并" : "";
+  const message = `已${bookmarkHint}在光标处插入 ${result.option.referenceText} 的 REF 域。`;
+  setCrossReferenceStatus(message);
+  setStatus(`已插入${kindLabel}题注交叉引用：${result.option.referenceText}`);
 }
 
 function openStylePromptEditor(mode: "create" | "update"): void {
@@ -1486,6 +1677,23 @@ async function exportDocxByPageRange(): Promise<void> {
   const suffix =
     result.results.length > 3 ? ` 等 ${result.results.length} 个文件。` : result.results.length ? ` 文件：${preview}。` : "";
   setStatus(`页码导出完成：共处理 ${result.total} 组，导出 ${result.results.length} 个文件。${suffix}`);
+}
+
+async function deleteRangeByPage(): Promise<void> {
+  const pageFrom = Number(deletePageFromEl?.value || 0);
+  const pageTo = Number(deletePageToEl?.value || 0);
+  if (!Number.isFinite(pageFrom) || pageFrom <= 0 || !Number.isFinite(pageTo) || pageTo <= 0) {
+    throw new Error("请填写有效的删除页码范围。");
+  }
+  if (pageTo < pageFrom) {
+    throw new Error("删除结束页码不能小于起始页码。");
+  }
+
+  setStatus(`正在删除第 ${pageFrom}~${pageTo} 页内容，请稍候...`);
+  await waitForUiPaint();
+  const app = await getApplication();
+  const result = await deleteContentByPageRange(app, { pageFrom, pageTo });
+  setStatus(`批量删除完成：已删除第 ${result.pageFrom}~${result.pageTo} 页范围内约 ${result.deletedParagraphs} 个段落。`);
 }
 
 async function applyStyleSetByNaturalLanguage(): Promise<void> {
@@ -2791,6 +2999,18 @@ exportDocxByPageRangeBtn?.addEventListener("click", () => {
     }
   })();
 });
+deleteContentByPageRangeBtn?.addEventListener("click", () => {
+  void (async () => {
+    try {
+      setBusy(true);
+      await deleteRangeByPage();
+    } catch (error) {
+      setStatus((error as Error).message, true);
+    } finally {
+      setBusy(false);
+    }
+  })();
+});
 applyStyleNlBtn?.addEventListener("click", () => {
   void (async () => {
     try {
@@ -2870,6 +3090,48 @@ stylePromptEditorContentEl?.addEventListener("keydown", (event) => {
     event.preventDefault();
     stylePromptEditorConfirmBtn?.click();
   }
+});
+crossReferenceKindEl?.addEventListener("change", () => {
+  crossReferenceSelectedIndex = 0;
+  renderCrossReferenceOptions(0);
+});
+crossReferenceSearchEl?.addEventListener("input", () => {
+  crossReferenceSearchQuery = String(crossReferenceSearchEl.value || "");
+  renderCrossReferenceOptions(crossReferenceSelectedIndex);
+});
+crossReferenceScanBtn?.addEventListener("click", () => {
+  void (async () => {
+    try {
+      setBusy(true);
+      await refreshCrossReferenceOptions(true);
+    } catch (error) {
+      const message = (error as Error).message;
+      setCrossReferenceStatus(message, true);
+    } finally {
+      setBusy(false);
+    }
+  })();
+});
+crossReferenceListEl?.addEventListener("change", () => {
+  const rawIndex = Number(crossReferenceListEl.value);
+  crossReferenceSelectedIndex = Number.isFinite(rawIndex) ? rawIndex : 0;
+  const selected = crossReferenceCandidates[crossReferenceSelectedIndex];
+  if (selected) {
+    setCrossReferenceStatus(`已选择第 ${selected.index} 条：${selected.referenceText}`);
+  }
+});
+crossReferenceInsertBtn?.addEventListener("click", () => {
+  void (async () => {
+    try {
+      setBusy(true);
+      await insertSelectedCrossReference();
+    } catch (error) {
+      const message = (error as Error).message;
+      setCrossReferenceStatus(message, true);
+    } finally {
+      setBusy(false);
+    }
+  })();
 });
 newChatSessionBtn?.addEventListener("click", createNewSession);
 openStyleToolBtn?.addEventListener("click", showStyleToolPage);

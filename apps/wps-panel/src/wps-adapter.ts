@@ -10,6 +10,7 @@ import { compareParagraphStyles } from "./style-inspector-diff";
 import { buildSelectionStyleDescription } from "./style-inspector-nl";
 import { readSelectionStyleRaw } from "./style-inspector-reader";
 import type { SelectionStyleDescriptionResult } from "./style-inspector-types";
+export * from "./cross-reference";
 
 async function getSelection(app: any): Promise<any> {
   const activeDocument = await app?.ActiveDocument;
@@ -162,6 +163,17 @@ export interface BatchPageExportResult {
   results: PageExportResult[];
 }
 
+export interface DeleteContentByPageRangeOptions {
+  pageFrom: number;
+  pageTo: number;
+}
+
+export interface DeleteContentByPageRangeResult {
+  pageFrom: number;
+  pageTo: number;
+  deletedParagraphs: number;
+}
+
 export interface SplitDocumentProgress {
   phase: "scan" | "export" | "done";
   scanned: number;
@@ -177,6 +189,28 @@ interface ParagraphRangeEntry {
   paragraph: any;
   range: any;
   start: number;
+}
+
+interface CaptionParagraphEntry {
+  paragraphIndex: number;
+  range: any;
+  start: number;
+  text: string;
+  rawText: string;
+}
+
+interface PageRangeBoundaryCandidate {
+  start: number;
+  startPage: number;
+  endPage: number;
+  text: string;
+}
+
+interface ResolvedPageRangeBoundary {
+  rangeStart: number;
+  rangeEnd: number;
+  title: string;
+  paragraphCount: number;
 }
 
 function normalizeText(value: unknown): string {
@@ -211,6 +245,68 @@ export function ensureUniqueDocxFileName(fileName: string, usedFileNames: Set<st
   }
   usedFileNames.add(candidate.toLowerCase());
   return candidate;
+}
+
+export function resolvePageRangeBoundary(
+  paragraphs: PageRangeBoundaryCandidate[],
+  pageFrom: number,
+  pageTo: number,
+  documentEnd: number,
+  fallbackTitle = ""
+): ResolvedPageRangeBoundary {
+  if (!Number.isFinite(pageFrom) || pageFrom <= 0 || !Number.isFinite(pageTo) || pageTo <= 0) {
+    throw new Error("页码范围无效。");
+  }
+  if (pageTo < pageFrom) {
+    throw new Error("结束页码不能小于起始页码。");
+  }
+  if (!Number.isFinite(documentEnd) || documentEnd <= 0) {
+    throw new Error("无法读取当前文档内容范围。");
+  }
+
+  let rangeStart = -1;
+  let rangeEnd = documentEnd;
+  let title = "";
+  let paragraphCount = 0;
+  let enteredRange = false;
+
+  for (const paragraph of paragraphs) {
+    const start = Number(paragraph.start || 0);
+    if (!Number.isFinite(start) || start < 0 || start >= documentEnd) continue;
+
+    const effectiveStartPage = Number(paragraph.startPage || 0);
+    const effectiveEndPage = Number(paragraph.endPage || 0) || effectiveStartPage;
+    if (effectiveStartPage <= 0 && effectiveEndPage <= 0) continue;
+
+    if (enteredRange && effectiveStartPage > pageTo) {
+      rangeEnd = Math.min(rangeEnd, start);
+      break;
+    }
+    if (!enteredRange) {
+      if (effectiveEndPage < pageFrom) continue;
+      if (effectiveStartPage > pageTo) break;
+      rangeStart = start;
+      enteredRange = true;
+    }
+
+    if (effectiveEndPage >= pageFrom && effectiveStartPage <= pageTo) {
+      paragraphCount += 1;
+      if (!title) {
+        title = normalizePageExportTitle(paragraph.text, "");
+      }
+    }
+  }
+
+  if (!enteredRange || rangeStart < 0 || rangeEnd <= rangeStart || paragraphCount <= 0) {
+    throw new Error(`在第 ${pageFrom}~${pageTo} 页内未找到可处理的内容。`);
+  }
+
+  return {
+    rangeStart,
+    rangeEnd,
+    title: title || normalizePageExportTitle("", fallbackTitle || `第${pageFrom}页导出`),
+    paragraphCount,
+  };
 }
 
 export function isLikelyTableCaptionText(text: string): boolean {
@@ -1836,6 +1932,66 @@ async function writePlainTextToDocument(text: string, targetDocument: any): Prom
   });
 }
 
+async function deleteRangeContent(range: any): Promise<boolean> {
+  if (await safeWrite(() => range?.Delete?.())) return true;
+  if (await safeWrite(() => range?.delete?.())) return true;
+  return safeWrite(() => {
+    (range as { Text?: string }).Text = "";
+  });
+}
+
+export async function deleteContentByPageRange(
+  app: any,
+  options: DeleteContentByPageRangeOptions
+): Promise<DeleteContentByPageRangeResult> {
+  const pageFrom = Number(options.pageFrom);
+  const pageTo = Number(options.pageTo);
+  if (!Number.isFinite(pageFrom) || pageFrom <= 0 || !Number.isFinite(pageTo) || pageTo <= 0) {
+    throw new Error("页码范围无效。");
+  }
+  if (pageTo < pageFrom) {
+    throw new Error("结束页码不能小于起始页码。");
+  }
+
+  const activeDocument = await getDocument(app);
+  const paragraphsRoot = await safeRead(() => activeDocument?.Paragraphs);
+  const paragraphCount = Number((await safeRead(() => paragraphsRoot?.Count)) || 0);
+  if (!paragraphsRoot || !Number.isFinite(paragraphCount) || paragraphCount <= 0) {
+    return { pageFrom, pageTo, deletedParagraphs: 0 };
+  }
+
+  const paragraphEntries: Array<{ range: any; startPage: number; endPage: number }> = [];
+  for (let index = 1; index <= paragraphCount; index += 1) {
+    const paragraph =
+      (await safeRead(() => paragraphsRoot?.Item?.(index))) ??
+      (await safeRead(() => paragraphsRoot?.item?.(index))) ??
+      (await safeRead(() => paragraphsRoot?.[index]));
+    if (!paragraph) continue;
+
+    const range = await safeRead(() => paragraph?.Range);
+    if (!range) continue;
+
+    let startPage = await getRangeStartPageNumber(range);
+    if (startPage <= 0) startPage = await getRangePageNumber(range);
+    const endPage = await getRangePageNumber(range);
+    const effectiveStartPage = startPage > 0 ? startPage : endPage;
+    const effectiveEndPage = endPage > 0 ? endPage : effectiveStartPage;
+    if (effectiveStartPage <= 0 && effectiveEndPage <= 0) continue;
+
+    if (effectiveEndPage < pageFrom || effectiveStartPage > pageTo) continue;
+    paragraphEntries.push({ range, startPage: effectiveStartPage, endPage: effectiveEndPage });
+  }
+
+  let deletedParagraphs = 0;
+  for (let index = paragraphEntries.length - 1; index >= 0; index -= 1) {
+    const entry = paragraphEntries[index];
+    if (entry.endPage < pageFrom || entry.startPage > pageTo) continue;
+    if (await deleteRangeContent(entry.range)) deletedParagraphs += 1;
+  }
+
+  return { pageFrom, pageTo, deletedParagraphs };
+}
+
 interface PageExportPayload {
   title: string;
   pageRange: any;
@@ -1844,21 +2000,11 @@ interface PageExportPayload {
 async function collectPageExportPayload(activeDocument: any, options: PageExportRangeSpec): Promise<PageExportPayload> {
   const pageFrom = Number(options.pageFrom);
   const pageTo = Number(options.pageTo);
-
-  if (!Number.isFinite(pageFrom) || pageFrom <= 0 || !Number.isFinite(pageTo) || pageTo <= 0) {
-    throw new Error("页码范围无效。");
-  }
-  if (pageTo < pageFrom) {
-    throw new Error("结束页码不能小于起始页码。");
-  }
   const contentRange =
     (await safeRead(() => activeDocument?.Content)) ??
     (await safeRead(() => activeDocument?.Range?.())) ??
     (await safeRead(() => activeDocument?.range?.()));
   const documentEnd = Number((await safeRead(() => contentRange?.End)) || 0);
-  if (!Number.isFinite(documentEnd) || documentEnd <= 0) {
-    throw new Error("无法读取当前文档内容范围。");
-  }
 
   const paragraphsRoot = await safeRead(() => activeDocument?.Paragraphs);
   const paragraphCount = Number((await safeRead(() => paragraphsRoot?.Count)) || 0);
@@ -1866,11 +2012,7 @@ async function collectPageExportPayload(activeDocument: any, options: PageExport
     throw new Error("当前文档没有可导出的段落内容。");
   }
 
-  let exportStart = -1;
-  let exportEnd = documentEnd;
-  let title = "";
-  let enteredRange = false;
-
+  const paragraphCandidates: PageRangeBoundaryCandidate[] = [];
   for (let index = 1; index <= paragraphCount; index += 1) {
     const paragraph =
       (await safeRead(() => paragraphsRoot?.Item?.(index))) ??
@@ -1887,37 +2029,23 @@ async function collectPageExportPayload(activeDocument: any, options: PageExport
     const endPage = await getRangePageNumber(paragraphRange);
     const effectiveStartPage = startPage > 0 ? startPage : endPage;
     const effectiveEndPage = endPage > 0 ? endPage : effectiveStartPage;
-    if (effectiveStartPage <= 0 && effectiveEndPage <= 0) continue;
-
-    if (enteredRange && effectiveStartPage > pageTo) {
-      exportEnd = Math.min(exportEnd, start);
-      break;
-    }
-    if (!enteredRange) {
-      if (effectiveEndPage < pageFrom) continue;
-      if (effectiveStartPage > pageTo) break;
-      exportStart = start;
-      enteredRange = true;
-    }
-
-    if (!title && effectiveEndPage >= pageFrom && effectiveStartPage <= pageTo) {
-      title = normalizePageExportTitle(await getRawRangeText(paragraphRange), "");
-    }
+    paragraphCandidates.push({
+      start,
+      startPage: effectiveStartPage,
+      endPage: effectiveEndPage,
+      text: await getRawRangeText(paragraphRange),
+    });
   }
 
-  if (!enteredRange || exportStart < 0 || exportEnd <= exportStart) {
-    throw new Error(`在第 ${pageFrom}~${pageTo} 页内未找到可导出的内容。`);
-  }
-
-  title = title || normalizePageExportTitle("", `第${pageFrom}页导出`);
+  const resolved = resolvePageRangeBoundary(paragraphCandidates, pageFrom, pageTo, documentEnd, `第${pageFrom}页导出`);
   const pageRange =
-    (await safeRead(() => activeDocument?.Range?.(exportStart, exportEnd))) ??
-    (await safeRead(() => activeDocument?.range?.(exportStart, exportEnd)));
+    (await safeRead(() => activeDocument?.Range?.(resolved.rangeStart, resolved.rangeEnd))) ??
+    (await safeRead(() => activeDocument?.range?.(resolved.rangeStart, resolved.rangeEnd)));
   if (!pageRange) {
     throw new Error("无法创建页码范围内容。");
   }
 
-  return { title, pageRange };
+  return { title: resolved.title, pageRange };
 }
 
 async function savePageExportRangeAsDocument(app: any, payload: PageExportPayload, filePath: string): Promise<PageExportResult> {

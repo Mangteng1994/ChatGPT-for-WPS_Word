@@ -557,6 +557,42 @@ button:disabled {
   gap: 6px;
 }
 
+.style-tool__grid--crossref {
+  align-items: start;
+}
+
+.style-tool__grid--crossref .crossref-search-field,
+.style-tool__grid--crossref .crossref-list-field {
+  grid-column: 1 / -1;
+}
+
+.crossref-list {
+  width: 100%;
+  min-height: 184px;
+  padding: 6px 8px;
+  border: 1px solid rgba(91, 83, 72, 0.2);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.crossref-list option {
+  padding: 4px 6px;
+}
+
+.crossref-status {
+  margin-top: 8px;
+  color: rgba(89, 80, 69, 0.88);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.crossref-status.is-error {
+  color: var(--danger);
+}
+
 .style-tool__actions {
   margin-top: 8px;
   display: flex;
