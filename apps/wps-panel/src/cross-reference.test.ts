@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import {
+  applyAllCaptionReferenceFontSize,
+  applyCaptionReferenceFontSize,
   buildCaptionReferenceBookmarkName,
   captionReferenceResultMatches,
+  extractCaptionReferenceBookmarkNameFromFieldCode,
   extractCaptionReferencePrefix,
   extractCaptionReferencePrefixDetails,
   isLikelyFigureReferenceText,
+  isCaptionReferenceBookmarkName,
   isLikelyTableReferenceText,
   insertCaptionReferenceOption,
   listAllCaptionReferenceOptions,
@@ -17,6 +21,11 @@ function testBookmarkNames(): void {
   assert.equal(buildCaptionReferenceBookmarkName("figure", 1), "FigRef_001");
   assert.equal(buildCaptionReferenceBookmarkName("figure", 12), "FigRef_012");
   assert.equal(buildCaptionReferenceBookmarkName("table", 7), "TblRef_007");
+  assert.equal(isCaptionReferenceBookmarkName("FigRef_001", "figure"), true);
+  assert.equal(isCaptionReferenceBookmarkName("TblRef_007", "table"), true);
+  assert.equal(isCaptionReferenceBookmarkName("TblRef_007", "figure"), false);
+  assert.equal(extractCaptionReferenceBookmarkNameFromFieldCode(" REF TblRef_007 \\h "), "TblRef_007");
+  assert.equal(extractCaptionReferenceBookmarkNameFromFieldCode(" PAGE "), "");
 }
 
 function testExtractsCaptionPrefixes(): void {
@@ -417,6 +426,105 @@ async function testFallsBackToFieldResultRangesWhenFindMissesFieldText(): Promis
   assert.equal(secondResult.bookmarkCreated, true);
 }
 
+async function testAppliesCaptionReferenceFontSizeByKind(): Promise<void> {
+  const sizes: number[] = [];
+  const fields = {
+    Count: 3,
+    Item(index: number) {
+      return [
+        {
+          Code: { Text: " REF TblRef_001 \\h " },
+          Result: { Text: "表3-1", Font: { set Size(value: number) { sizes.push(value); } } },
+          Update() {
+            return true;
+          },
+        },
+        {
+          Code: { Text: " REF FigRef_002 \\h " },
+          Result: { Text: "图3-2", Font: { set Size(value: number) { sizes.push(value + 100); } } },
+          Update() {
+            return true;
+          },
+        },
+        {
+          Code: { Text: " PAGE " },
+          Result: { Text: "1", Font: { set Size(_value: number) {} } },
+          Update() {
+            return true;
+          },
+        },
+      ][index - 1];
+    },
+  };
+  const app = {
+    ActiveDocument: {
+      Fields: fields,
+    },
+  };
+
+  const tableResult = await applyCaptionReferenceFontSize(app, "table", 10.5);
+  assert.deepEqual(tableResult, { kind: "table", fontSize: 10.5, matched: 1, updated: 1 });
+  assert.deepEqual(sizes, [10.5]);
+
+  const figureResult = await applyCaptionReferenceFontSize(app, "figure", 9);
+  assert.deepEqual(figureResult, { kind: "figure", fontSize: 9, matched: 1, updated: 1 });
+  assert.deepEqual(sizes, [10.5, 109]);
+}
+
+async function testAppliesCaptionReferenceFontSizeForAllKinds(): Promise<void> {
+  const sizes: number[] = [];
+  const fields = {
+    Count: 4,
+    Item(index: number) {
+      return [
+        {
+          Code: { Text: " REF TblRef_001 \\h " },
+          Result: { Text: "表3-1", Font: { set Size(value: number) { sizes.push(value); } } },
+          Update() {
+            return true;
+          },
+        },
+        {
+          Code: { Text: " REF FigRef_002 \\h " },
+          Result: { Text: "图3-2", Font: { set Size(value: number) { sizes.push(value + 100); } } },
+          Update() {
+            return true;
+          },
+        },
+        {
+          Code: { Text: " REF TblRef_003 \\h " },
+          Result: { Text: "表3-3", Font: { set Size(value: number) { sizes.push(value + 200); } } },
+          Update() {
+            return true;
+          },
+        },
+        {
+          Code: { Text: " DATE " },
+          Result: { Text: "2026-06-16", Font: { set Size(_value: number) {} } },
+          Update() {
+            return true;
+          },
+        },
+      ][index - 1];
+    },
+  };
+  const app = {
+    ActiveDocument: {
+      Fields: fields,
+    },
+  };
+
+  const result = await applyAllCaptionReferenceFontSize(app, 10.5);
+  assert.deepEqual(result, {
+    fontSize: 10.5,
+    totalMatched: 3,
+    totalUpdated: 3,
+    figures: { kind: "figure", fontSize: 10.5, matched: 1, updated: 1 },
+    tables: { kind: "table", fontSize: 10.5, matched: 2, updated: 2 },
+  });
+  assert.deepEqual(sizes, [110.5, 10.5, 210.5]);
+}
+
 async function main(): Promise<void> {
   testBookmarkNames();
   testExtractsCaptionPrefixes();
@@ -430,6 +538,8 @@ async function main(): Promise<void> {
   await testListsAllCaptionReferencesInOneScan();
   await testFallsBackToFindWhenFieldOffsetHitsCodeText();
   await testFallsBackToFieldResultRangesWhenFindMissesFieldText();
+  await testAppliesCaptionReferenceFontSizeByKind();
+  await testAppliesCaptionReferenceFontSizeForAllKinds();
 
   console.log("cross-reference tests passed");
 }

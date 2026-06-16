@@ -443,10 +443,17 @@
                 <span>题注列表</span>
                 <select id="crossref-list" class="crossref-list" size="8" aria-label="题注列表"></select>
               </label>
+              <label>
+                <span>交叉引用字号</span>
+                <input id="crossref-font-size" type="number" min="1" step="0.5" placeholder="如 10.5" />
+              </label>
             </div>
             <div class="style-tool__actions">
               <button id="crossref-scan" class="button-secondary" type="button">扫描题注</button>
               <button id="crossref-insert" type="button">插入引用</button>
+            </div>
+            <div class="style-tool__actions style-tool__actions--end">
+              <button id="crossref-apply-font-size" class="button-secondary" type="button">批量设置交叉引用字号</button>
             </div>
             <div id="crossref-status" class="crossref-status">请选择引用类型，然后扫描题注。</div>
           </section>

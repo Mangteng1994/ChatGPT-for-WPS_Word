@@ -29,6 +29,7 @@ import {
   type UploadedImage,
 } from "./session-store";
 import {
+  applyAllCaptionReferenceFontSize,
   applyNaturalLanguageStyleSet,
   applyPunctuationFontByPageRange,
   applyStyleByPageRange,
@@ -218,6 +219,8 @@ const crossReferenceKindEl = document.querySelector<HTMLSelectElement>("#crossre
 const crossReferenceListEl = document.querySelector<HTMLSelectElement>("#crossref-list");
 const crossReferenceScanBtn = document.querySelector<HTMLButtonElement>("#crossref-scan");
 const crossReferenceInsertBtn = document.querySelector<HTMLButtonElement>("#crossref-insert");
+const crossReferenceFontSizeEl = document.querySelector<HTMLInputElement>("#crossref-font-size");
+const crossReferenceApplyFontSizeBtn = document.querySelector<HTMLButtonElement>("#crossref-apply-font-size");
 const crossReferenceStatusEl = document.querySelector<HTMLDivElement>("#crossref-status");
 const diffModalEl = document.querySelector<HTMLDivElement>("#diff-modal");
 const diffContentEl = document.querySelector<HTMLDivElement>("#diff-content");
@@ -1065,6 +1068,7 @@ function setBusy(isBusy: boolean): void {
     inspectStyleSelectionBtn,
     crossReferenceScanBtn,
     crossReferenceInsertBtn,
+    crossReferenceApplyFontSizeBtn,
   ].forEach((btn) => {
     if (btn) btn.disabled = isBusy;
   });
@@ -1092,6 +1096,7 @@ function setBusy(isBusy: boolean): void {
     crossReferenceSearchEl,
     crossReferenceKindEl,
     crossReferenceListEl,
+    crossReferenceFontSizeEl,
   ].forEach((el) => {
     if (el) el.disabled = isBusy;
   });
@@ -1244,6 +1249,7 @@ function updateCrossReferenceControls(): void {
   if (crossReferenceListEl) crossReferenceListEl.disabled = disabledByBusy || !hasVisibleCandidates;
   if (crossReferenceScanBtn) crossReferenceScanBtn.disabled = disabledByBusy;
   if (crossReferenceInsertBtn) crossReferenceInsertBtn.disabled = disabledByBusy || !hasVisibleCandidates;
+  if (crossReferenceApplyFontSizeBtn) crossReferenceApplyFontSizeBtn.disabled = disabledByBusy;
 }
 
 function renderCrossReferenceOptions(selectedIndex = 0): void {
@@ -1362,6 +1368,23 @@ async function insertSelectedCrossReference(): Promise<void> {
   const message = `已${bookmarkHint}在光标处插入 ${result.option.referenceText} 的 REF 域。`;
   setCrossReferenceStatus(message);
   setStatus(`已插入${kindLabel}题注交叉引用：${result.option.referenceText}`);
+}
+
+async function applyCrossReferenceFontSizeBatch(): Promise<void> {
+  const fontSize = Number(crossReferenceFontSizeEl?.value || 0);
+  if (!Number.isFinite(fontSize) || fontSize <= 0) {
+    throw new Error("请输入有效的交叉引用字号。");
+  }
+
+  const app = await getApplication();
+  const result = await applyAllCaptionReferenceFontSize(app, fontSize);
+  if (!result.totalMatched) {
+    setCrossReferenceStatus("未找到图或表交叉引用字段。", true);
+    return;
+  }
+
+  const message = `已将 ${result.totalUpdated}/${result.totalMatched} 个图表交叉引用调整为 ${fontSize} 磅。图 ${result.figures.updated}/${result.figures.matched}，表 ${result.tables.updated}/${result.tables.matched}。`;
+  setCrossReferenceStatus(message);
 }
 
 function openStylePromptEditor(mode: "create" | "update"): void {
@@ -3125,6 +3148,19 @@ crossReferenceInsertBtn?.addEventListener("click", () => {
     try {
       setBusy(true);
       await insertSelectedCrossReference();
+    } catch (error) {
+      const message = (error as Error).message;
+      setCrossReferenceStatus(message, true);
+    } finally {
+      setBusy(false);
+    }
+  })();
+});
+crossReferenceApplyFontSizeBtn?.addEventListener("click", () => {
+  void (async () => {
+    try {
+      setBusy(true);
+      await applyCrossReferenceFontSizeBatch();
     } catch (error) {
       const message = (error as Error).message;
       setCrossReferenceStatus(message, true);

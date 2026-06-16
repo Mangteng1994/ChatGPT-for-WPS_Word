@@ -566,6 +566,10 @@ button:disabled {
   grid-column: 1 / -1;
 }
 
+.style-tool__grid--crossref input[type="number"] {
+  width: 100%;
+}
+
 .crossref-list {
   width: 100%;
   min-height: 184px;

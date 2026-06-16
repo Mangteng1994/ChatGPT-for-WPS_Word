@@ -28,6 +28,21 @@ export interface CaptionReferenceInsertResult {
   bookmarkCreated: boolean;
 }
 
+export interface CaptionReferenceFontSizeResult {
+  fontSize: number;
+  kind: CaptionReferenceType;
+  matched: number;
+  updated: number;
+}
+
+export interface CaptionReferenceFontSizeBatchResult {
+  fontSize: number;
+  totalMatched: number;
+  totalUpdated: number;
+  figures: CaptionReferenceFontSizeResult;
+  tables: CaptionReferenceFontSizeResult;
+}
+
 export interface CaptionReferenceScanResult {
   figures: CaptionReferenceOption[];
   tables: CaptionReferenceOption[];
@@ -149,6 +164,22 @@ export function captionReferenceResultMatches(actualText: unknown, expectedText:
 export function buildCaptionReferenceBookmarkName(kind: CaptionReferenceType, index: number): string {
   const prefix = kind === "figure" ? "FigRef" : "TblRef";
   return `${prefix}_${String(index).padStart(3, "0")}`;
+}
+
+export function isCaptionReferenceBookmarkName(bookmarkName: unknown, kind?: CaptionReferenceType): boolean {
+  const normalized = String(bookmarkName || "").trim();
+  if (!normalized) return false;
+  if (kind === "figure") return /^FigRef_\d+$/i.test(normalized);
+  if (kind === "table") return /^TblRef_\d+$/i.test(normalized);
+  return /^(?:FigRef|TblRef)_\d+$/i.test(normalized);
+}
+
+export function extractCaptionReferenceBookmarkNameFromFieldCode(fieldCodeText: unknown): string {
+  const normalized = String(fieldCodeText || "").replace(/\s+/g, " ").trim();
+  if (!normalized) return "";
+  const match = normalized.match(/\bREF\s+([A-Za-z0-9_]+)/i);
+  const bookmarkName = match?.[1] || "";
+  return isCaptionReferenceBookmarkName(bookmarkName) ? bookmarkName : "";
 }
 
 function isCaptionGapChar(character: string): boolean {
@@ -918,6 +949,18 @@ async function readFieldResultText(field: any): Promise<string> {
   return resultRange ? readRangeText(resultRange) : "";
 }
 
+async function readFieldCodeText(field: any): Promise<string> {
+  const codeRange = ((await safeRead(() => field?.Code)) ?? (await safeRead(() => field?.code))) || null;
+  return codeRange ? readRangeText(codeRange) : "";
+}
+
+async function setRangeFontSize(range: any, fontSize: number): Promise<boolean> {
+  if (!Number.isFinite(fontSize) || fontSize <= 0) return false;
+  const font = await getRangeFont(range);
+  if (!font) return false;
+  return setFirstWritableProperty(font, ["Size", "size"], fontSize);
+}
+
 async function validateInsertedField(
   field: any,
   expectedText: string
@@ -1130,4 +1173,69 @@ export async function insertCaptionReference(
   }
 
   return insertCaptionReferenceOption(app, option);
+}
+
+export async function applyCaptionReferenceFontSize(
+  app: any,
+  kind: CaptionReferenceType,
+  fontSize: number
+): Promise<CaptionReferenceFontSizeResult> {
+  const normalizedFontSize = Number(fontSize);
+  if (!Number.isFinite(normalizedFontSize) || normalizedFontSize <= 0) {
+    throw new Error("请输入有效的字号。");
+  }
+
+  const activeDocument = await getDocument(app);
+  const fields = await getFirstAvailableFieldCollection([activeDocument]);
+  if (!fields) {
+    return { kind, fontSize: normalizedFontSize, matched: 0, updated: 0 };
+  }
+
+  const fieldCount = await getFieldCollectionCount(fields);
+  let matched = 0;
+  let updated = 0;
+
+  for (let index = 1; index <= fieldCount; index += 1) {
+    const field = await getFieldByIndex(fields, index);
+    if (!field) continue;
+
+    const bookmarkName = extractCaptionReferenceBookmarkNameFromFieldCode(await readFieldCodeText(field));
+    if (!isCaptionReferenceBookmarkName(bookmarkName, kind)) continue;
+
+    matched += 1;
+    await safeWrite(() => field?.Update?.());
+    await safeWrite(() => field?.update?.());
+
+    const resultRange = await getFieldResultRange(field);
+    if (!resultRange) continue;
+    if (await setRangeFontSize(resultRange, normalizedFontSize)) updated += 1;
+  }
+
+  return {
+    kind,
+    fontSize: normalizedFontSize,
+    matched,
+    updated,
+  };
+}
+
+export async function applyAllCaptionReferenceFontSize(
+  app: any,
+  fontSize: number
+): Promise<CaptionReferenceFontSizeBatchResult> {
+  const normalizedFontSize = Number(fontSize);
+  if (!Number.isFinite(normalizedFontSize) || normalizedFontSize <= 0) {
+    throw new Error("请输入有效的字号。");
+  }
+
+  const figures = await applyCaptionReferenceFontSize(app, "figure", normalizedFontSize);
+  const tables = await applyCaptionReferenceFontSize(app, "table", normalizedFontSize);
+
+  return {
+    fontSize: normalizedFontSize,
+    totalMatched: figures.matched + tables.matched,
+    totalUpdated: figures.updated + tables.updated,
+    figures,
+    tables,
+  };
 }
