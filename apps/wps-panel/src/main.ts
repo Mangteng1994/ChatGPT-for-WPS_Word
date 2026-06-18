@@ -717,7 +717,6 @@ function showStyleToolPage(): void {
   closeSessionContextMenu();
   renderCurrentDocumentLabel();
   renderStylePromptLibrary();
-  crossReferenceCandidates = [];
   renderCrossReferenceOptions(0);
   updateCrossReferenceControls();
   if (chatPageEl) chatPageEl.hidden = true;
@@ -725,10 +724,6 @@ function showStyleToolPage(): void {
   if (styleToolPageEl) styleToolPageEl.hidden = false;
   if (manageChatSessionsBtn) manageChatSessionsBtn.classList.remove("is-active");
   if (openStyleToolBtn) openStyleToolBtn.classList.add("is-active");
-  void refreshCrossReferenceOptions().catch((error) => {
-    const message = (error as Error).message;
-    setCrossReferenceStatus(message, true);
-  });
 }
 
 function setMultiSelectMode(next: boolean): void {
@@ -3370,11 +3365,6 @@ void (async () => {
     persistAllSessions();
     redrawActiveSession();
     await Promise.all([loadConfig(), loadModels()]);
-    try {
-      await refreshStyleOptions();
-    } catch {
-      populateStyleOptions([]);
-    }
     renderSettingsStatus();
     setBusy(false);
     setStatus("就绪：请选择会话并开始对话。");
