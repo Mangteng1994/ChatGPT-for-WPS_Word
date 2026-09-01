@@ -62,6 +62,10 @@ import {
 } from "./wps-adapter";
 import type { SelectionStyleDescriptionResult } from "./style-inspector-types";
 import type { ChatFileAttachment, ChatImageAttachment, CodexChatMode, CodexReasoningEffort, CodexRunRequest } from "../../../shared/types";
+import {
+  loadStylePromptTemplateLibrary,
+  type StylePromptTemplateRecord,
+} from "./style-prompt-library";
 import "./style.css";
 
 declare global {
@@ -75,14 +79,6 @@ declare global {
 
 const TASKPANE_KEY = "codex_taskpane_id";
 const STYLE_PROMPT_LIBRARY_STORAGE_KEY = "codex_style_prompt_library_v1";
-
-interface StylePromptTemplateRecord {
-  id: string;
-  name: string;
-  prompt: string;
-  createdAt: number;
-  updatedAt: number;
-}
 
 let busy = false;
 let sessions: ChatSessionRecord[] = [];
@@ -1108,50 +1104,10 @@ function setBusy(isBusy: boolean): void {
   refreshPageExportRangeRows();
 }
 
-function sortStylePromptTemplates(items: StylePromptTemplateRecord[]): StylePromptTemplateRecord[] {
-  return items
-    .slice()
-    .sort((a, b) => {
-      if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt;
-      return a.name.localeCompare(b.name, "zh-CN");
-    });
-}
-
 function loadStylePromptTemplates(): void {
-  try {
-    const raw = window.localStorage.getItem(STYLE_PROMPT_LIBRARY_STORAGE_KEY);
-    if (!raw) {
-      stylePromptTemplates = [];
-      activeStylePromptTemplateId = "";
-      return;
-    }
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      stylePromptTemplates = [];
-      activeStylePromptTemplateId = "";
-      return;
-    }
-    const now = Date.now();
-    const normalized: StylePromptTemplateRecord[] = parsed
-      .map((item) => {
-        const name = String(item?.name || "").trim();
-        const prompt = String(item?.prompt || "").trim();
-        if (!name || !prompt) return null;
-        return {
-          id: String(item?.id || createId("style-prompt")),
-          name,
-          prompt,
-          createdAt: Number.isFinite(Number(item?.createdAt)) ? Number(item.createdAt) : now,
-          updatedAt: Number.isFinite(Number(item?.updatedAt)) ? Number(item.updatedAt) : now,
-        } as StylePromptTemplateRecord;
-      })
-      .filter((item): item is StylePromptTemplateRecord => Boolean(item));
-    stylePromptTemplates = sortStylePromptTemplates(normalized);
-    activeStylePromptTemplateId = stylePromptTemplates[0]?.id || "";
-  } catch {
-    stylePromptTemplates = [];
-    activeStylePromptTemplateId = "";
-  }
+  const raw = window.localStorage.getItem(STYLE_PROMPT_LIBRARY_STORAGE_KEY);
+  stylePromptTemplates = loadStylePromptTemplateLibrary(raw);
+  activeStylePromptTemplateId = stylePromptTemplates[0]?.id || "";
 }
 
 function persistStylePromptTemplates(): void {
@@ -1194,11 +1150,12 @@ function renderStylePromptTemplateOptions(): void {
 function renderStylePromptTemplateControls(): void {
   const selected = selectedStylePromptTemplate();
   const hasSelection = Boolean(selected);
+  const isBuiltin = Boolean(selected?.isBuiltin);
   const disabledByBusy = busy;
   if (stylePromptTemplateSelectEl) stylePromptTemplateSelectEl.disabled = disabledByBusy;
   if (stylePromptCreateBtn) stylePromptCreateBtn.disabled = disabledByBusy;
-  if (stylePromptUpdateBtn) stylePromptUpdateBtn.disabled = disabledByBusy || !hasSelection;
-  if (stylePromptDeleteBtn) stylePromptDeleteBtn.disabled = disabledByBusy || !hasSelection;
+  if (stylePromptUpdateBtn) stylePromptUpdateBtn.disabled = disabledByBusy || !hasSelection || isBuiltin;
+  if (stylePromptDeleteBtn) stylePromptDeleteBtn.disabled = disabledByBusy || !hasSelection || isBuiltin;
   if (stylePromptUseBtn) stylePromptUseBtn.disabled = disabledByBusy || !hasSelection;
   if (stylePromptEditorNameEl) stylePromptEditorNameEl.disabled = disabledByBusy;
   if (stylePromptEditorContentEl) stylePromptEditorContentEl.disabled = disabledByBusy;
@@ -1390,6 +1347,7 @@ function openStylePromptEditor(mode: "create" | "update"): void {
   if (mode === "update") {
     const selected = selectedStylePromptTemplate();
     if (!selected) throw new Error("请先选择模板。");
+    if (selected.isBuiltin) throw new Error("内置模板不可修改，请新建模板后再编辑。");
     stylePromptEditorMode = "update";
     stylePromptEditorTargetTemplateId = selected.id;
     stylePromptEditorTitleEl.textContent = "修改样式模板";
@@ -1446,8 +1404,9 @@ function createStylePromptTemplate(name: string, prompt: string): void {
     prompt,
     createdAt: now,
     updatedAt: now,
+    isBuiltin: false,
   };
-  stylePromptTemplates = sortStylePromptTemplates([next, ...stylePromptTemplates]);
+  stylePromptTemplates = loadStylePromptTemplateLibrary(JSON.stringify([next, ...stylePromptTemplates]));
   activeStylePromptTemplateId = next.id;
   persistStylePromptTemplates();
   renderStylePromptLibrary();
@@ -1464,6 +1423,7 @@ function useStylePromptTemplateToRequirement(): void {
 function updateStylePromptTemplate(templateId: string, name: string, prompt: string): void {
   const selected = getStylePromptTemplateById(templateId);
   if (!selected) throw new Error("未找到待修改模板。");
+  if (selected.isBuiltin) throw new Error("内置模板不可修改，请新建模板后再编辑。");
 
   const duplicated = stylePromptTemplates.find((item) => item.id !== templateId && item.name === name);
   if (duplicated) {
@@ -1471,8 +1431,8 @@ function updateStylePromptTemplate(templateId: string, name: string, prompt: str
   }
 
   const now = Date.now();
-  stylePromptTemplates = sortStylePromptTemplates(
-    stylePromptTemplates.map((item) =>
+  stylePromptTemplates = loadStylePromptTemplateLibrary(
+    JSON.stringify(stylePromptTemplates.map((item) =>
       item.id === templateId
         ? {
             ...item,
@@ -1481,6 +1441,7 @@ function updateStylePromptTemplate(templateId: string, name: string, prompt: str
             updatedAt: now,
           }
         : item
+      )
     )
   );
   activeStylePromptTemplateId = templateId;
@@ -1492,10 +1453,11 @@ function updateStylePromptTemplate(templateId: string, name: string, prompt: str
 function deleteStylePromptTemplate(): void {
   const selected = selectedStylePromptTemplate();
   if (!selected) throw new Error("请先选择模板。");
+  if (selected.isBuiltin) throw new Error("内置模板不可删除。");
   const confirmed = window.confirm(`确认删除模板“${selected.name}”吗？`);
   if (!confirmed) return;
 
-  stylePromptTemplates = stylePromptTemplates.filter((item) => item.id !== selected.id);
+  stylePromptTemplates = loadStylePromptTemplateLibrary(JSON.stringify(stylePromptTemplates.filter((item) => item.id !== selected.id)));
   activeStylePromptTemplateId = stylePromptTemplates[0]?.id || "";
   persistStylePromptTemplates();
   renderStylePromptLibrary();
