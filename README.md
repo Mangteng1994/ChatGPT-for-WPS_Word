@@ -4,7 +4,7 @@
 
 ## 当前阶段
 
-- Phase 1（MVP）：`WPS 前端面板 + 本地 codex-bridge`，跑通读取/改写/插入/摘要闭环
+- Phase 1（MVP）：`WPS 前端面板 + Rust bridge`，跑通读取/改写/插入/摘要闭环
 - Phase 2：引入 `wps-word-mcp`（让 Codex 直接 tool calling 操作 Word）
 - Phase 3：权限控制、审计日志、复杂格式与批处理能力
 
@@ -13,7 +13,8 @@
 ```text
 apps/wps-panel/            # WPS 插件前端
 apps/wps-local-addin/      # 本地 WPS JS 加载项包装层（ribbon + taskpane）
-services/codex-bridge/     # 本地 bridge（调用 codex CLI）
+../codex-for-wps-word-rust/ # Rust bridge（默认 bridge:dev，负责调用 codex CLI）
+services/codex-bridge/     # 旧版 Node bridge（legacy / 回退对照）
 shared/                    # 前后端共享类型
 docs/                      # 设计文档
 ```
@@ -34,6 +35,7 @@ docs/                      # 设计文档
 1. 安装依赖（首次）：
    - `npm install`
    - `cd apps/wps-local-addin && npm install`
+   - 回到项目根目录执行 `npm run rust:build`，预先构建 Rust 服务（需要 Rust 工具链）。
 2. 一键安装（根目录）：
    - `npm run install:wps-codex`
    - 或双击 `install-wps-codex.cmd`
@@ -48,6 +50,10 @@ docs/                      # 设计文档
 - `npm run repair:wps-codex`
 - 或双击 `repair-wps-codex.cmd`
 
+日常启动直接运行已构建的 Rust 程序，不再执行 `cargo run`，避免编译或构建锁等待导致 WPS 启动时加载不到 Codex 选项卡。首次安装及修改 Rust 源码后需显式执行 `npm run rust:build`；已有服务运行时，应先结束本项目的 Rust 服务进程再重新构建。缺少构建产物时，启动命令会明确报错。
+
+若服务启动前已打开 WPS，先运行 `npm run services:check` 确认三个服务正常，再保存文档、完全退出并重新打开 WPS。功能区自动收起是 WPS 独立的界面设置，可双击“开始”恢复常驻。
+
 卸载：
 - `npm run uninstall:wps-codex`
 - 或双击 `uninstall-wps-codex.cmd`
@@ -59,14 +65,17 @@ docs/                      # 设计文档
    - `cd apps/wps-local-addin && npm install`
 2. 配置 bridge（两种方式任选其一）：
    - 环境变量：`CODEX_WORKING_DIR`（必填）、`CODEX_CLI_PATH`（可选）
-   - 或复制 `services/codex-bridge/config.example.json` 为 `services/codex-bridge/config.local.json` 并填写
+   - 或复制 `../codex-for-wps-word-rust/config.example.json` 为 `../codex-for-wps-word-rust/config.local.json` 并填写
 3. 启动 bridge（根目录）：
    - `npm run bridge:dev`
+   - 这是 Rust 版桥接服务；如果你想对照旧实现，可用 `npm run bridge:dev:legacy`
+   - 首次运行及修改 Rust 源码后先执行 `npm run rust:build`（构建需要 Rust 工具链），日常启动使用已构建程序。
 4. 启动面板页（根目录）：
    - `npm run panel:dev`
-5. 注册并启动本地加载项静态服务（根目录）：
+5. 注册并启动本地加载项宿主服务（根目录）：
    - `npm run addin:register`
    - `npm run addin:host`
+   - `addin:host` 现在默认启动 Rust 宿主；如需回退旧实现，可用 `npm run addin:host:legacy`
 6. WPS 打开后，在 `Codex` 选项卡点击 `打开 Codex 面板`：
    - 默认会打开 `http://127.0.0.1:5173/index.html`
    - 面板会直接使用本地 `Application` 读写当前文档选区
@@ -81,19 +90,23 @@ docs/                      # 设计文档
   - `npm run uninstall:wps-codex`
 - 从 PowerShell 启动完整调试链路：
   - `npm run start:wps-codex`
+  - 该入口当前仍使用外层启动 wrapper；WPS 宿主内的 `start/stop/check` 已切到 Rust 运行时控制
 - 从资源管理器双击启动：
   - `start-wps-codex.cmd`
 - 从 PowerShell 关闭 bridge 和面板服务：
   - `npm run stop:wps-codex`
+  - 现在默认走 Rust `services stop` 子命令，保留 `3889` 宿主，仅关闭 bridge 和面板服务
+- 从 PowerShell 检查本地服务状态：
+  - `npm run services:check`
 - 从资源管理器双击关闭：
   - `stop-wps-codex.cmd`
 - 从 WPS 的 `Codex` 选项卡启动本地服务：
   - 点击 `启动本地服务`
-  - 该按钮会拉起加载项静态服务（3889）+ bridge（32123）+ 面板 dev server（5173）
+  - 该按钮现在由 Rust 宿主内建的 `start` 动作处理，会拉起加载项宿主服务（3889）+ Rust bridge（32123）+ 面板 dev server（5173）
   - 前提是 WPS 加载项自身已经加载成功
 - 从 WPS 的 `Codex` 选项卡关闭本地服务：
   - 点击 `关闭本地服务`
-  - 该按钮会关闭 bridge 和面板 dev server，但保留 WPS 加载项调试服务
+  - 该按钮现在由 Rust 宿主内建的 `stop` 动作处理，会关闭 bridge 和面板 dev server，但保留 WPS 加载项调试服务
 
 ## 面板能力
 
