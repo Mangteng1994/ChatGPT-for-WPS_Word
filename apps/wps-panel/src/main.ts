@@ -1317,7 +1317,8 @@ async function insertSelectedCrossReference(): Promise<void> {
 
   const kindLabel = crossReferenceKindLabel(result.option.kind);
   const bookmarkHint = result.bookmarkCreated ? "已自动补齐书签并" : "";
-  const message = `已${bookmarkHint}在光标处插入 ${result.option.referenceText} 的 REF 域。`;
+  const fieldModeLabel = result.mode === "parts" ? "分段 REF 域" : "REF 域";
+  const message = `已${bookmarkHint}在光标处插入 ${result.option.referenceText} 的${fieldModeLabel}。`;
   setCrossReferenceStatus(message);
   setStatus(`已插入${kindLabel}题注交叉引用：${result.option.referenceText}`);
 }

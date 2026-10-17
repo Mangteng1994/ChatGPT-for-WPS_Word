@@ -2,6 +2,8 @@ const WD_FIELD_EMPTY = -1;
 const WD_FIELD_REF = 3;
 const WD_REFERENCE_TYPE_BOOKMARK = 2;
 const WD_REFERENCE_KIND_CONTENT_TEXT = -1;
+const WD_CHARACTER = 1;
+const WD_COLLAPSE_START = 1;
 
 const CAPTION_GAP_PATTERN = /^[\s\u3000\u0007\u0013\u0014\u0015\u200B\u200C\u200D\uFEFF]$/;
 const CAPTION_CONTROL_PATTERN = /[\r\u0007\u0013\u0014\u0015\u200B\u200C\u200D\uFEFF]/g;
@@ -14,6 +16,8 @@ export interface CaptionReferenceOption {
   captionText: string;
   referenceText: string;
   bookmarkName: string;
+  referenceParts: CaptionReferencePart[];
+  referencePartsAreFieldBacked: boolean;
   searchText: string;
   referenceStart: number;
   referenceEnd: number;
@@ -23,9 +27,19 @@ export interface CaptionReferenceOption {
   paragraphRange?: any;
 }
 
+export interface CaptionReferencePart {
+  text: string;
+  bookmarkName: string;
+  referenceStart: number;
+  referenceEnd: number;
+  isField: boolean;
+  fieldIndex: number;
+}
+
 export interface CaptionReferenceInsertResult {
   option: CaptionReferenceOption;
   bookmarkCreated: boolean;
+  mode: "parts" | "single";
 }
 
 export interface CaptionReferenceFontSizeResult {
@@ -52,6 +66,15 @@ export interface CaptionReferencePrefixMatch {
   referenceText: string;
   referenceStartOffset: number;
   referenceLength: number;
+  referenceParts: CaptionReferencePrefixPart[];
+}
+
+export interface CaptionReferencePrefixPart {
+  text: string;
+  referenceStartOffset: number;
+  referenceLength: number;
+  isField: boolean;
+  fieldIndex: number;
 }
 
 export interface CaptionReferenceInsertAttemptResult {
@@ -76,6 +99,25 @@ interface CaptionMappedText {
   text: string;
   startOffsets: number[];
   endOffsets: number[];
+  rangeStartOffsets: number[];
+  rangeEndOffsets: number[];
+  fieldFlags: boolean[];
+  fieldIndexes: number[];
+}
+
+interface CaptionReferenceRangePart {
+  text: string;
+  referenceStart: number;
+  referenceEnd: number;
+  isField: boolean;
+  fieldIndex: number;
+}
+
+interface CaptionReferenceFieldResultPart {
+  text: string;
+  referenceStart: number | null;
+  referenceEnd: number | null;
+  fieldIndex: number;
 }
 
 function stripCaptionControlCharacters(value: string): string {
@@ -104,8 +146,13 @@ function buildCaptionMappedText(value: string): CaptionMappedText {
   const characters: string[] = [];
   const startOffsets: number[] = [];
   const endOffsets: number[] = [];
+  const rangeStartOffsets: number[] = [];
+  const rangeEndOffsets: number[] = [];
+  const fieldFlags: boolean[] = [];
+  const fieldIndexes: number[] = [];
 
   let index = 0;
+  let fieldIndex = 0;
   while (index < source.length) {
     const character = source[index];
     if (character === "\u0013") {
@@ -113,12 +160,17 @@ function buildCaptionMappedText(value: string): CaptionMappedText {
       const separatorIndex = source.indexOf("\u0014", index + 1);
       const fieldEnd = separatorIndex >= 0 ? source.indexOf("\u0015", separatorIndex + 1) : -1;
       if (separatorIndex >= 0 && fieldEnd >= 0) {
+        fieldIndex += 1;
         for (let resultIndex = separatorIndex + 1; resultIndex < fieldEnd; resultIndex += 1) {
           const resultCharacter = source[resultIndex];
           if (isCaptionControlCharacter(resultCharacter)) continue;
           characters.push(resultCharacter);
           startOffsets.push(resultIndex === separatorIndex + 1 ? fieldStart : resultIndex);
           endOffsets.push(fieldEnd + 1);
+          rangeStartOffsets.push(fieldStart);
+          rangeEndOffsets.push(fieldEnd + 1);
+          fieldFlags.push(true);
+          fieldIndexes.push(fieldIndex);
         }
         index = fieldEnd + 1;
         continue;
@@ -133,6 +185,10 @@ function buildCaptionMappedText(value: string): CaptionMappedText {
     characters.push(character);
     startOffsets.push(index);
     endOffsets.push(index + 1);
+    rangeStartOffsets.push(index);
+    rangeEndOffsets.push(index + 1);
+    fieldFlags.push(false);
+    fieldIndexes.push(0);
     index += 1;
   }
 
@@ -140,6 +196,10 @@ function buildCaptionMappedText(value: string): CaptionMappedText {
     text: characters.join(""),
     startOffsets,
     endOffsets,
+    rangeStartOffsets,
+    rangeEndOffsets,
+    fieldFlags,
+    fieldIndexes,
   };
 }
 
@@ -166,12 +226,30 @@ export function buildCaptionReferenceBookmarkName(kind: CaptionReferenceType, in
   return `${prefix}_${String(index).padStart(3, "0")}`;
 }
 
+function buildCaptionReferencePartBookmarkName(bookmarkName: string, partIndex: number): string {
+  return `${bookmarkName}_P${String(partIndex + 1).padStart(2, "0")}`;
+}
+
+function toCaptionReferenceParts(
+  bookmarkName: string,
+  parts: CaptionReferenceRangePart[]
+): CaptionReferencePart[] {
+  return parts.map((part, partIndex) => ({
+    text: normalizeCaptionReferenceVisibleText(part.text),
+    bookmarkName: buildCaptionReferencePartBookmarkName(bookmarkName, partIndex),
+    referenceStart: part.referenceStart,
+    referenceEnd: part.referenceEnd,
+    isField: part.isField,
+    fieldIndex: part.fieldIndex,
+  }));
+}
+
 export function isCaptionReferenceBookmarkName(bookmarkName: unknown, kind?: CaptionReferenceType): boolean {
   const normalized = String(bookmarkName || "").trim();
   if (!normalized) return false;
-  if (kind === "figure") return /^FigRef_\d+$/i.test(normalized);
-  if (kind === "table") return /^TblRef_\d+$/i.test(normalized);
-  return /^(?:FigRef|TblRef)_\d+$/i.test(normalized);
+  if (kind === "figure") return /^FigRef_\d+(?:_P\d+)?$/i.test(normalized);
+  if (kind === "table") return /^TblRef_\d+(?:_P\d+)?$/i.test(normalized);
+  return /^(?:FigRef|TblRef)_\d+(?:_P\d+)?$/i.test(normalized);
 }
 
 export function extractCaptionReferenceBookmarkNameFromFieldCode(fieldCodeText: unknown): string {
@@ -180,6 +258,14 @@ export function extractCaptionReferenceBookmarkNameFromFieldCode(fieldCodeText: 
   const match = normalized.match(/\bREF\s+([A-Za-z0-9_]+)/i);
   const bookmarkName = match?.[1] || "";
   return isCaptionReferenceBookmarkName(bookmarkName) ? bookmarkName : "";
+}
+
+export function buildCaptionReferenceFieldCodeText(bookmarkName: string, existingFieldCodeText = ""): string {
+  const normalizedBookmarkName = String(bookmarkName || "").trim();
+  if (!isCaptionReferenceBookmarkName(normalizedBookmarkName)) return "";
+  const existing = String(existingFieldCodeText || "").replace(/\s+/g, " ").trim();
+  const hyperlinkSwitch = /\s\\h(?:\s|$)/i.test(` ${existing} `) ? " \\h" : "";
+  return ` REF ${normalizedBookmarkName}${hyperlinkSwitch} \\* MERGEFORMAT `;
 }
 
 function isCaptionGapChar(character: string): boolean {
@@ -271,6 +357,52 @@ function readCaptionToken(source: string, startIndex: number): { end: number; ha
   return { end: index, hasNumericLike };
 }
 
+function buildCaptionReferencePrefixParts(
+  mappedText: CaptionMappedText,
+  displayStart: number,
+  displayEnd: number
+): CaptionReferencePrefixPart[] {
+  const parts: CaptionReferencePrefixPart[] = [];
+  for (let index = displayStart; index < displayEnd; index += 1) {
+    const text = mappedText.text[index] || "";
+    const referenceStartOffset = mappedText.rangeStartOffsets[index];
+    const referenceEndOffset = mappedText.rangeEndOffsets[index];
+    const isField = Boolean(mappedText.fieldFlags[index]);
+    const fieldIndex = Number(mappedText.fieldIndexes[index] || 0);
+    if (!text || referenceStartOffset === undefined || referenceEndOffset === undefined) continue;
+
+    const previous = parts[parts.length - 1];
+    const canMerge =
+      previous &&
+      previous.isField === isField &&
+      previous.fieldIndex === fieldIndex &&
+      previous.referenceStartOffset + previous.referenceLength === referenceStartOffset;
+    const sameField =
+      previous &&
+      isField &&
+      previous.fieldIndex === fieldIndex &&
+      previous.referenceStartOffset === referenceStartOffset &&
+      previous.referenceStartOffset + previous.referenceLength === referenceEndOffset;
+
+    if (canMerge || sameField) {
+      previous.text += text;
+      if (!sameField) {
+        previous.referenceLength = referenceEndOffset - previous.referenceStartOffset;
+      }
+      continue;
+    }
+
+    parts.push({
+      text,
+      referenceStartOffset,
+      referenceLength: referenceEndOffset - referenceStartOffset,
+      isField,
+      fieldIndex,
+    });
+  }
+  return parts;
+}
+
 export function extractCaptionReferencePrefixDetails(text: string): CaptionReferencePrefixMatch | null {
   const source = String(text || "");
   if (!source) return null;
@@ -319,6 +451,7 @@ export function extractCaptionReferencePrefixDetails(text: string): CaptionRefer
     referenceText,
     referenceStartOffset,
     referenceLength: referenceEndOffset - referenceStartOffset,
+    referenceParts: buildCaptionReferencePrefixParts(mappedText, referenceDisplayStart, rawEnd),
   };
 }
 
@@ -381,12 +514,21 @@ async function getSelection(app: any): Promise<any> {
 }
 
 async function getParagraphByIndex(paragraphs: any, index: number): Promise<any | null> {
+  return getCollectionItem(paragraphs, index);
+}
+
+async function getCollectionCount(collection: any): Promise<number> {
+  const count = Number((await readCallableOrValue(collection, ["Count", "count", "Length", "length"])) ?? 0);
+  return Number.isFinite(count) && count >= 0 ? count : 0;
+}
+
+async function getCollectionItem(collection: any, index: number): Promise<any | null> {
   const arrayIndex = index - 1;
   return (
-    (await safeRead(() => paragraphs?.Item?.(index))) ??
-    (await safeRead(() => paragraphs?.item?.(index))) ??
-    (await safeRead(() => paragraphs?.[arrayIndex])) ??
-    (await safeRead(() => paragraphs?.[index])) ??
+    (await safeRead(() => collection?.Item?.(index))) ??
+    (await safeRead(() => collection?.item?.(index))) ??
+    (await safeRead(() => collection?.[arrayIndex])) ??
+    (await safeRead(() => collection?.[index])) ??
     null
   );
 }
@@ -396,7 +538,7 @@ async function readParagraphEntriesFromCollection(
   seenRanges: Set<string>
 ): Promise<CaptionParagraphEntry[]> {
   const paragraphs = context.paragraphs;
-  const count = Number((await safeRead(() => paragraphs?.Count)) || 0);
+  const count = await getCollectionCount(paragraphs);
   if (!Number.isFinite(count) || count <= 0) return [];
 
   const items: CaptionParagraphEntry[] = [];
@@ -407,13 +549,13 @@ async function readParagraphEntriesFromCollection(
     const range = (await safeRead(() => paragraph?.Range)) ?? (await safeRead(() => paragraph?.range));
     if (!range) continue;
 
-    const startValue = (await safeRead(() => range?.Start)) ?? (await safeRead(() => range?.start));
+    const startValue = await readCallableOrValue(range, ["Start", "start"]);
     if (startValue === null || startValue === undefined) continue;
     const start = Number(startValue);
     if (!Number.isFinite(start) || start < 0) continue;
 
-    const rawText = String((await safeRead(() => range?.Text)) || "");
-    const endValue = (await safeRead(() => range?.End)) ?? (await safeRead(() => range?.end));
+    const rawText = String((await readCallableOrValue(range, ["Text", "text"])) || "");
+    const endValue = await readCallableOrValue(range, ["End", "end"]);
     const end = endValue === null || endValue === undefined ? start + rawText.length : Number(endValue);
     if (!Number.isFinite(end) || end <= start) continue;
 
@@ -430,16 +572,12 @@ async function readParagraphEntriesFromCollection(
 
 async function collectTableParagraphContexts(activeDocument: any): Promise<ParagraphCollectionContext[]> {
   const tables = (await safeRead(() => activeDocument?.Tables)) ?? (await safeRead(() => activeDocument?.tables));
-  const tableCount = Number((await safeRead(() => tables?.Count)) || (await safeRead(() => tables?.count)) || 0);
+  const tableCount = await getCollectionCount(tables);
   if (!tables || !Number.isFinite(tableCount) || tableCount <= 0) return [];
 
   const contexts: ParagraphCollectionContext[] = [];
   for (let tableIndex = 1; tableIndex <= tableCount; tableIndex += 1) {
-    const table =
-      (await safeRead(() => tables?.Item?.(tableIndex))) ??
-      (await safeRead(() => tables?.item?.(tableIndex))) ??
-      (await safeRead(() => tables?.[tableIndex - 1])) ??
-      (await safeRead(() => tables?.[tableIndex]));
+    const table = await getCollectionItem(tables, tableIndex);
     const range = (await safeRead(() => table?.Range)) ?? (await safeRead(() => table?.range));
     const paragraphs = (await safeRead(() => range?.Paragraphs)) ?? (await safeRead(() => range?.paragraphs));
     if (paragraphs) contexts.push({ paragraphs });
@@ -451,14 +589,10 @@ async function collectTableParagraphContexts(activeDocument: any): Promise<Parag
 async function collectStoryParagraphContexts(activeDocument: any): Promise<ParagraphCollectionContext[]> {
   const contexts: ParagraphCollectionContext[] = [];
   const storyRanges = (await safeRead(() => activeDocument?.StoryRanges)) ?? (await safeRead(() => activeDocument?.storyRanges));
-  const storyCount = Number((await safeRead(() => storyRanges?.Count)) || (await safeRead(() => storyRanges?.count)) || 0);
+  const storyCount = await getCollectionCount(storyRanges);
   if (storyRanges && Number.isFinite(storyCount) && storyCount > 0) {
     for (let storyIndex = 1; storyIndex <= storyCount; storyIndex += 1) {
-      const storyRange =
-        (await safeRead(() => storyRanges?.Item?.(storyIndex))) ??
-        (await safeRead(() => storyRanges?.item?.(storyIndex))) ??
-        (await safeRead(() => storyRanges?.[storyIndex - 1])) ??
-        (await safeRead(() => storyRanges?.[storyIndex]));
+      const storyRange = await getCollectionItem(storyRanges, storyIndex);
       const paragraphs = (await safeRead(() => storyRange?.Paragraphs)) ?? (await safeRead(() => storyRange?.paragraphs));
       if (paragraphs) contexts.push({ paragraphs });
     }
@@ -485,16 +619,12 @@ async function collectStoryParagraphContexts(activeDocument: any): Promise<Parag
 
 async function collectShapeParagraphContexts(activeDocument: any): Promise<ParagraphCollectionContext[]> {
   const shapes = (await safeRead(() => activeDocument?.Shapes)) ?? (await safeRead(() => activeDocument?.shapes));
-  const shapeCount = Number((await safeRead(() => shapes?.Count)) || (await safeRead(() => shapes?.count)) || 0);
+  const shapeCount = await getCollectionCount(shapes);
   if (!shapes || !Number.isFinite(shapeCount) || shapeCount <= 0) return [];
 
   const contexts: ParagraphCollectionContext[] = [];
   for (let shapeIndex = 1; shapeIndex <= shapeCount; shapeIndex += 1) {
-    const shape =
-      (await safeRead(() => shapes?.Item?.(shapeIndex))) ??
-      (await safeRead(() => shapes?.item?.(shapeIndex))) ??
-      (await safeRead(() => shapes?.[shapeIndex - 1])) ??
-      (await safeRead(() => shapes?.[shapeIndex]));
+    const shape = await getCollectionItem(shapes, shapeIndex);
     const textFrame = (await safeRead(() => shape?.TextFrame)) ?? (await safeRead(() => shape?.textFrame));
     const textRange =
       (await safeRead(() => textFrame?.TextRange)) ??
@@ -591,7 +721,69 @@ async function getRangeFind(range: any): Promise<any | null> {
 }
 
 async function getRangeFields(range: any): Promise<any | null> {
-  return ((await safeRead(() => range?.Fields)) ?? (await safeRead(() => range?.fields))) || null;
+  return ((await readCallableOrValue(range, ["Fields", "fields"]))) || null;
+}
+
+async function getUsableRangeFields(primaryRange: any, fallbackRange?: any): Promise<any | null> {
+  const primaryFields = await getRangeFields(primaryRange);
+  if (primaryFields && (await getFieldCollectionCount(primaryFields)) > 0) return primaryFields;
+
+  if (fallbackRange && fallbackRange !== primaryRange) {
+    const fallbackFields = await getRangeFields(fallbackRange);
+    if (fallbackFields && (await getFieldCollectionCount(fallbackFields)) > 0) return fallbackFields;
+  }
+
+  return null;
+}
+
+async function moveRangeBoundary(range: any, methodNames: string[], unit: number, count: number): Promise<boolean> {
+  for (const methodName of methodNames) {
+    const method = await safeRead(() => range?.[methodName]);
+    if (typeof method !== "function") continue;
+    if (await safeWrite(() => method.call(range, unit, count))) return true;
+  }
+  return false;
+}
+
+async function createRangeFromParentOffsets(parentRangeSource: any, startOffset: number, length: number): Promise<any | null> {
+  if (!parentRangeSource || !Number.isFinite(startOffset) || !Number.isFinite(length) || startOffset < 0 || length <= 0) {
+    return null;
+  }
+
+  const range = (await duplicateRange(parentRangeSource)) ?? parentRangeSource;
+  if (!range) return null;
+
+  const collapsed =
+    (await safeWrite(() => range?.Collapse?.(WD_COLLAPSE_START))) ||
+    (await safeWrite(() => range?.collapse?.(WD_COLLAPSE_START)));
+  if (!collapsed) return null;
+
+  const movedEnd = await moveRangeBoundary(range, ["MoveEnd", "moveEnd"], WD_CHARACTER, startOffset + length);
+  const movedStart = await moveRangeBoundary(range, ["MoveStart", "moveStart"], WD_CHARACTER, startOffset);
+  return movedEnd && movedStart ? range : null;
+}
+
+async function findCaptionReferenceRangeWithinRange(range: any, expectedText: string): Promise<any | null> {
+  if (!range) return null;
+
+  for (const findText of buildCaptionReferenceFindTexts(expectedText)) {
+    const searchRange = (await duplicateRange(range)) ?? range;
+    const find = await getRangeFind(searchRange);
+    if (!find) continue;
+    if (!(await executeFind(find, findText))) continue;
+
+    const foundText = await readRangeText(searchRange);
+    if (captionReferenceResultMatches(foundText, expectedText).matched) return searchRange;
+  }
+
+  const paragraphText = await readRangeText(range);
+  const prefixDetails = extractCaptionReferencePrefixDetails(paragraphText);
+  if (prefixDetails && normalizeCaptionReferenceResultText(prefixDetails.referenceText) === normalizeCaptionReferenceResultText(expectedText)) {
+    const offsetRange = await createRangeFromParentOffsets(range, prefixDetails.referenceStartOffset, prefixDetails.referenceLength);
+    if (await rangeMatchesExpectedText(offsetRange, expectedText)) return offsetRange;
+  }
+
+  return null;
 }
 
 async function findCaptionReferenceRangeInParagraph(
@@ -603,30 +795,189 @@ async function findCaptionReferenceRangeInParagraph(
 ): Promise<any | null> {
   if (!Number.isFinite(paragraphStart) || !Number.isFinite(paragraphEnd) || paragraphEnd <= paragraphStart) return null;
   let paragraphRange = (await duplicateRange(paragraphRangeSource)) ?? paragraphRangeSource ?? null;
-  if (!paragraphRange || !(await getRangeFind(paragraphRange))) {
+  if (!paragraphRange) {
     paragraphRange = await createDocumentRange(activeDocument, paragraphStart, paragraphEnd);
   }
   if (!paragraphRange) return null;
 
-  for (const findText of buildCaptionReferenceFindTexts(expectedText)) {
-    const searchRange = (await duplicateRange(paragraphRange)) ?? paragraphRange;
-    const find = await getRangeFind(searchRange);
-    if (!(await executeFind(find, findText))) continue;
+  const paragraphResult = await findCaptionReferenceRangeWithinRange(paragraphRange, expectedText);
+  if (paragraphResult) return paragraphResult;
 
-    const foundText = await readRangeText(searchRange);
-    if (captionReferenceResultMatches(foundText, expectedText).matched) return searchRange;
-  }
+  const fallbackRange = await createDocumentRange(activeDocument, paragraphStart, paragraphEnd);
+  if (fallbackRange) return findCaptionReferenceRangeWithinRange(fallbackRange, expectedText);
 
   return null;
 }
 
 async function readRangeBoundary(range: any, propertyNames: string[]): Promise<number | null> {
   for (const propertyName of propertyNames) {
-    const value = await safeRead(() => range?.[propertyName]);
+    const propertyValue = await safeRead(() => range?.[propertyName]);
+    const value = typeof propertyValue === "function" ? await safeRead(() => propertyValue.call(range)) : propertyValue;
     const numberValue = Number(value);
     if (Number.isFinite(numberValue)) return numberValue;
   }
   return null;
+}
+
+function isSafeCaptionReferenceFieldText(text: string): boolean {
+  return Boolean(text) && normalizeCaptionReferenceResultText(text) === text;
+}
+
+function validateCaptionReferenceRangeParts(
+  parts: CaptionReferenceRangePart[],
+  expectedText: string
+): CaptionReferenceRangePart[] {
+  const joinedText = normalizeCaptionReferenceResultText(parts.map((part) => part.text).join(""));
+  const expected = normalizeCaptionReferenceResultText(expectedText);
+  if (!expected || joinedText !== expected) return [];
+  if (!parts.some((part) => part.isField)) return [];
+  if (!parts.every((part) => part.text && part.referenceEnd > part.referenceStart)) return [];
+  if (!parts.every((part) => !part.isField || isSafeCaptionReferenceFieldText(part.text))) return [];
+  return parts;
+}
+
+function alignCaptionFieldResultsToReferenceParts(
+  fieldResults: CaptionReferenceFieldResultPart[],
+  referenceStart: number,
+  referenceEnd: number,
+  expectedText: string
+): CaptionReferenceRangePart[] {
+  const expected = normalizeCaptionReferenceResultText(expectedText);
+  if (!expected || referenceEnd <= referenceStart) return [];
+
+  const parts: CaptionReferenceRangePart[] = [];
+  let expectedCursor = 0;
+  for (const fieldResult of fieldResults) {
+    const fieldText = normalizeCaptionReferenceVisibleText(fieldResult.text);
+    if (!isSafeCaptionReferenceFieldText(fieldText)) continue;
+
+    const matchIndex = expected.indexOf(fieldText, expectedCursor);
+    if (matchIndex < 0) continue;
+
+    if (matchIndex > expectedCursor) {
+      parts.push({
+        text: expected.slice(expectedCursor, matchIndex),
+        referenceStart: referenceStart + expectedCursor,
+        referenceEnd: referenceStart + matchIndex,
+        isField: false,
+        fieldIndex: 0,
+      });
+    }
+
+    const safeStart =
+      fieldResult.referenceStart !== null &&
+      fieldResult.referenceEnd !== null &&
+      fieldResult.referenceEnd > fieldResult.referenceStart
+        ? fieldResult.referenceStart
+        : referenceStart + matchIndex;
+    const safeEnd =
+      fieldResult.referenceStart !== null &&
+      fieldResult.referenceEnd !== null &&
+      fieldResult.referenceEnd > fieldResult.referenceStart
+        ? fieldResult.referenceEnd
+        : referenceStart + matchIndex + fieldText.length;
+
+    parts.push({
+      text: fieldText,
+      referenceStart: safeStart,
+      referenceEnd: safeEnd,
+      isField: true,
+      fieldIndex: fieldResult.fieldIndex,
+    });
+
+    expectedCursor = matchIndex + fieldText.length;
+    if (expectedCursor >= expected.length) break;
+  }
+
+  if (expectedCursor < expected.length) {
+    parts.push({
+      text: expected.slice(expectedCursor),
+      referenceStart: referenceStart + expectedCursor,
+      referenceEnd,
+      isField: false,
+      fieldIndex: 0,
+    });
+  }
+
+  return validateCaptionReferenceRangeParts(parts, expectedText);
+}
+
+async function buildCaptionReferencePartsFromFields(
+  paragraphRangeSource: any,
+  paragraphStart: number,
+  referenceStart: number,
+  referenceEnd: number,
+  expectedText: string
+): Promise<CaptionReferenceRangePart[]> {
+  const paragraphRange = (await duplicateRange(paragraphRangeSource)) ?? paragraphRangeSource ?? null;
+  const fields = await getUsableRangeFields(paragraphRange, paragraphRangeSource);
+  const fieldCount = await getFieldCollectionCount(fields);
+  if (!fields || fieldCount <= 0) return [];
+
+  const fieldParts: CaptionReferenceRangePart[] = [];
+  const fieldResults: CaptionReferenceFieldResultPart[] = [];
+  for (let fieldIndex = 1; fieldIndex <= fieldCount; fieldIndex += 1) {
+    const field = await getFieldByIndex(fields, fieldIndex);
+    const resultRange = await getFieldResultRange(field);
+    const text = normalizeCaptionReferenceVisibleText(await readRangeText(resultRange));
+    if (!text) continue;
+
+    const start = await readRangeBoundary(resultRange, ["Start", "start"]);
+    const end = await readRangeBoundary(resultRange, ["End", "end"]);
+    fieldResults.push({ text, referenceStart: start, referenceEnd: end, fieldIndex });
+
+    if (start === null || end === null || end <= start) continue;
+    if (start < referenceStart || end > referenceEnd) continue;
+
+    fieldParts.push({ text, referenceStart: start, referenceEnd: end, isField: true, fieldIndex });
+  }
+
+  fieldParts.sort((left, right) => left.referenceStart - right.referenceStart || (right.referenceEnd - left.referenceEnd));
+
+  const selectedFieldParts: CaptionReferenceRangePart[] = [];
+  let cursor = referenceStart;
+  for (const part of fieldParts) {
+    if (part.referenceStart < cursor) continue;
+    if (part.referenceStart > cursor) {
+      const literalRange = await createRangeFromParentOffsets(paragraphRange, cursor - paragraphStart, part.referenceStart - cursor);
+      const literalText = normalizeCaptionReferenceVisibleText(await readRangeText(literalRange));
+      if (literalText) {
+        selectedFieldParts.push({
+          text: literalText,
+          referenceStart: cursor,
+          referenceEnd: part.referenceStart,
+          isField: false,
+          fieldIndex: 0,
+        });
+      }
+    }
+    selectedFieldParts.push(part);
+    cursor = part.referenceEnd;
+  }
+
+  if (cursor < referenceEnd) {
+    const literalRange = await createRangeFromParentOffsets(paragraphRange, cursor - paragraphStart, referenceEnd - cursor);
+    const literalText = normalizeCaptionReferenceVisibleText(await readRangeText(literalRange));
+    if (literalText) {
+      selectedFieldParts.push({
+        text: literalText,
+        referenceStart: cursor,
+        referenceEnd,
+        isField: false,
+        fieldIndex: 0,
+      });
+    }
+  }
+
+  const validatedFieldRangeParts = validateCaptionReferenceRangeParts(selectedFieldParts, expectedText);
+  if (validatedFieldRangeParts.length) return validatedFieldRangeParts;
+
+  return alignCaptionFieldResultsToReferenceParts(fieldResults, referenceStart, referenceEnd, expectedText);
+}
+
+async function rangeMatchesExpectedText(range: any, expectedText: string): Promise<boolean> {
+  if (!range) return false;
+  return captionReferenceResultMatches(await readRangeText(range), expectedText).matched;
 }
 
 async function findCaptionReferenceRangeByFieldsInParagraph(
@@ -640,10 +991,10 @@ async function findCaptionReferenceRangeByFieldsInParagraph(
   if (!expected || !/^[图表]/.test(expected)) return null;
 
   let paragraphRange = (await duplicateRange(paragraphRangeSource)) ?? paragraphRangeSource ?? null;
-  let fields = await getRangeFields(paragraphRange);
+  let fields = await getUsableRangeFields(paragraphRange, paragraphRangeSource);
   if (!fields) {
     paragraphRange = await createDocumentRange(activeDocument, paragraphStart, paragraphEnd);
-    fields = await getRangeFields(paragraphRange);
+    fields = await getUsableRangeFields(paragraphRange);
   }
   const fieldCount = await getFieldCollectionCount(fields);
   if (!fields || fieldCount <= 0) return null;
@@ -677,6 +1028,45 @@ async function findCaptionReferenceRangeByFieldsInParagraph(
   return null;
 }
 
+async function resolvePreferredCaptionReferenceRange(
+  activeDocument: any,
+  referenceStart: number,
+  referenceEnd: number,
+  expectedText: string,
+  paragraphStart: number,
+  paragraphEnd: number,
+  paragraphRange: any
+): Promise<any | null> {
+  const directRange = await createDocumentRange(activeDocument, referenceStart, referenceEnd);
+  if (await rangeMatchesExpectedText(directRange, expectedText)) {
+    return directRange;
+  }
+
+  const fieldAlignedRange = await findCaptionReferenceRangeByFieldsInParagraph(
+    activeDocument,
+    paragraphRange,
+    paragraphStart,
+    paragraphEnd,
+    expectedText
+  );
+  if (await rangeMatchesExpectedText(fieldAlignedRange, expectedText)) {
+    return fieldAlignedRange;
+  }
+
+  const foundRange = await findCaptionReferenceRangeInParagraph(
+    activeDocument,
+    paragraphRange,
+    paragraphStart,
+    paragraphEnd,
+    expectedText
+  );
+  if (await rangeMatchesExpectedText(foundRange, expectedText)) {
+    return foundRange;
+  }
+
+  return null;
+}
+
 async function getBookmarkByName(activeDocument: any, bookmarkName: string): Promise<any | null> {
   const bookmarks = await getBookmarkCollection(activeDocument);
   if (!bookmarks) return null;
@@ -689,13 +1079,26 @@ async function getBookmarkByName(activeDocument: any, bookmarkName: string): Pro
 }
 
 async function readRangeText(range: any): Promise<string> {
-  return String((await safeRead(() => range?.Text)) ?? (await safeRead(() => range?.text)) ?? "");
+  return String((await readCallableOrValue(range, ["Text", "text"])) ?? "");
 }
 
 async function getBookmarkRangeText(activeDocument: any, bookmarkName: string): Promise<string> {
   const bookmark = await getBookmarkByName(activeDocument, bookmarkName);
   const range = (await safeRead(() => bookmark?.Range)) ?? (await safeRead(() => bookmark?.range)) ?? null;
   return range ? readRangeText(range) : "";
+}
+
+async function readCallableOrValue(target: any, propertyNames: string[]): Promise<unknown> {
+  if (!target) return null;
+  for (const propertyName of propertyNames) {
+    const value = await safeRead(() => target?.[propertyName]);
+    if (value === null || value === undefined) continue;
+    if (typeof value !== "function") return value;
+
+    const calledValue = await safeRead(() => value.call(target));
+    if (calledValue !== null && calledValue !== undefined) return calledValue;
+  }
+  return null;
 }
 
 async function bookmarkMatchesExpectedText(activeDocument: any, bookmarkName: string, expectedText: string): Promise<boolean> {
@@ -718,25 +1121,103 @@ async function addBookmarkAtRange(
     throw new Error("当前文档不支持书签集合。");
   }
 
+  const bookmarkRange = await resolvePreferredCaptionReferenceRange(
+    activeDocument,
+    referenceStart,
+    referenceEnd,
+    expectedText,
+    paragraphStart,
+    paragraphEnd,
+    paragraphRange
+  );
+  if (!bookmarkRange) {
+    const fallbackRange = await createDocumentRange(activeDocument, referenceStart, referenceEnd);
+    const fallbackText = normalizeCaptionReferenceResultText(await readRangeText(fallbackRange));
+    throw new Error(`书签“${bookmarkName}”范围不正确，当前范围文本为“${fallbackText || "空"}”。`);
+  }
+
   const existingBookmark = await getBookmarkByName(activeDocument, bookmarkName);
   if (existingBookmark && await bookmarkMatchesExpectedText(activeDocument, bookmarkName, expectedText)) {
     return false;
   }
 
-  let bookmarkRange = await createDocumentRange(activeDocument, referenceStart, referenceEnd);
-  if (!bookmarkRange) {
-    throw new Error(`无法为书签“${bookmarkName}”定位题注范围。`);
+  if (existingBookmark) {
+    await safeWrite(() => existingBookmark?.Delete?.());
+    await safeWrite(() => existingBookmark?.delete?.());
   }
-  const rangeText = await readRangeText(bookmarkRange);
-  if (!captionReferenceResultMatches(rangeText, expectedText).matched) {
-    const foundRange =
-      (await findCaptionReferenceRangeInParagraph(activeDocument, paragraphRange, paragraphStart, paragraphEnd, expectedText)) ??
-      (await findCaptionReferenceRangeByFieldsInParagraph(activeDocument, paragraphRange, paragraphStart, paragraphEnd, expectedText));
-    if (!foundRange) {
-      const normalizedRangeText = normalizeCaptionReferenceResultText(rangeText);
-      throw new Error(`书签“${bookmarkName}”范围不正确，当前范围文本为“${normalizedRangeText || "空"}”。`);
-    }
-    bookmarkRange = foundRange;
+
+  const addAttempts = [
+    () => bookmarks?.Add?.({ Name: bookmarkName, Range: bookmarkRange }),
+    () => bookmarks?.Add?.(bookmarkName, bookmarkRange),
+    () => bookmarks?.Add?.(bookmarkRange, bookmarkName),
+  ];
+
+  for (const attempt of addAttempts) {
+    if (!(await safeWrite(attempt))) continue;
+    if (await bookmarkMatchesExpectedText(activeDocument, bookmarkName, expectedText)) return true;
+  }
+
+  const bookmarkText = normalizeCaptionReferenceResultText(await getBookmarkRangeText(activeDocument, bookmarkName));
+  throw new Error(`书签“${bookmarkName}”创建失败，当前书签文本为“${bookmarkText || "空"}”。`);
+}
+
+async function findCaptionReferenceFieldPartRange(
+  paragraphRangeSource: any,
+  part: CaptionReferencePart
+): Promise<any | null> {
+  if (!part.isField || !Number.isFinite(part.fieldIndex) || part.fieldIndex <= 0) return null;
+  const paragraphRange = (await duplicateRange(paragraphRangeSource)) ?? paragraphRangeSource ?? null;
+  const fields = await getUsableRangeFields(paragraphRange, paragraphRangeSource);
+  if (!fields) return null;
+
+  const field = await getFieldByIndex(fields, part.fieldIndex);
+  const resultRange = await getFieldResultRange(field);
+  if (!resultRange) return null;
+
+  const extendedRange = (await duplicateRange(resultRange)) ?? null;
+  if (extendedRange && await moveRangeBoundary(extendedRange, ["MoveEnd", "moveEnd"], WD_CHARACTER, 1)) {
+    if (await rangeMatchesExpectedText(extendedRange, part.text)) return extendedRange;
+  }
+
+  return (await rangeMatchesExpectedText(resultRange, part.text)) ? resultRange : null;
+}
+
+async function addBookmarkForCaptionReferencePart(
+  activeDocument: any,
+  option: CaptionReferenceOption,
+  part: CaptionReferencePart
+): Promise<boolean> {
+  const fieldPartRange = await findCaptionReferenceFieldPartRange(option.paragraphRange, part);
+  if (fieldPartRange) {
+    return addBookmarkAtResolvedRange(activeDocument, part.bookmarkName, fieldPartRange, part.text);
+  }
+
+  return addBookmarkAtRange(
+    activeDocument,
+    part.bookmarkName,
+    part.referenceStart,
+    part.referenceEnd,
+    part.text,
+    option.paragraphStart,
+    option.paragraphEnd,
+    option.paragraphRange
+  );
+}
+
+async function addBookmarkAtResolvedRange(
+  activeDocument: any,
+  bookmarkName: string,
+  bookmarkRange: any,
+  expectedText: string
+): Promise<boolean> {
+  const bookmarks = await getBookmarkCollection(activeDocument);
+  if (!bookmarks) {
+    throw new Error("当前文档不支持书签集合。");
+  }
+
+  const existingBookmark = await getBookmarkByName(activeDocument, bookmarkName);
+  if (existingBookmark && await bookmarkMatchesExpectedText(activeDocument, bookmarkName, expectedText)) {
+    return false;
   }
 
   if (existingBookmark) {
@@ -795,12 +1276,33 @@ async function getAllCaptionReferenceOptions(activeDocument: any): Promise<Capti
     if (kind === "table") tableIndex = index;
 
     const bookmarkName = buildCaptionReferenceBookmarkName(kind, index);
+    const rawReferenceRangeParts = referenceMatch.referenceParts.map((part) => ({
+      text: part.text,
+      referenceStart: entry.start + part.referenceStartOffset,
+      referenceEnd: entry.start + part.referenceStartOffset + part.referenceLength,
+      isField: part.isField,
+      fieldIndex: part.fieldIndex,
+    }));
+    const fieldReferenceRangeParts = await buildCaptionReferencePartsFromFields(
+      entry.range,
+      entry.start,
+      referenceStart,
+      referenceEnd,
+      referenceText
+    );
+    const referencePartsAreFieldBacked = fieldReferenceRangeParts.length > 0;
+    const referenceParts = toCaptionReferenceParts(
+      bookmarkName,
+      referencePartsAreFieldBacked ? fieldReferenceRangeParts : rawReferenceRangeParts
+    );
     const option = {
       index,
       kind,
       captionText: trimmedText,
       referenceText,
       bookmarkName,
+      referenceParts,
+      referencePartsAreFieldBacked,
       searchText: normalizeCaptionReferenceSearchText([trimmedText, referenceText, bookmarkName].join(" ")),
       referenceStart,
       referenceEnd,
@@ -901,7 +1403,11 @@ async function copyRangeFontFormatting(sourceRange: any, targetRange: any): Prom
 }
 
 async function getFieldResultRange(field: any): Promise<any | null> {
-  return ((await safeRead(() => field?.Result)) ?? (await safeRead(() => field?.result))) || null;
+  return ((await readCallableOrValue(field, ["Result", "result"]))) || null;
+}
+
+async function getFieldCodeRange(field: any): Promise<any | null> {
+  return ((await readCallableOrValue(field, ["Code", "code"]))) || null;
 }
 
 async function deleteField(field: any): Promise<void> {
@@ -911,10 +1417,7 @@ async function deleteField(field: any): Promise<void> {
 
 async function getFieldCollectionCount(fields: any): Promise<number> {
   const count = Number(
-    (await safeRead(() => fields?.Count)) ??
-    (await safeRead(() => fields?.count)) ??
-    (await safeRead(() => fields?.Length)) ??
-    (await safeRead(() => fields?.length)) ??
+    (await readCallableOrValue(fields, ["Count", "count", "Length", "length"])) ??
     0
   );
   return Number.isFinite(count) && count >= 0 ? count : 0;
@@ -924,6 +1427,8 @@ async function getFieldByIndex(fields: any, index: number): Promise<any | null> 
   return (
     (await safeRead(() => fields?.Item?.(index))) ??
     (await safeRead(() => fields?.item?.(index))) ??
+    (await safeRead(() => fields?.Item?.(index - 1))) ??
+    (await safeRead(() => fields?.item?.(index - 1))) ??
     (await safeRead(() => fields?.[index - 1])) ??
     (await safeRead(() => fields?.[index])) ??
     null
@@ -938,7 +1443,7 @@ async function getLatestField(fields: any): Promise<any | null> {
 
 async function getFirstAvailableFieldCollection(targets: any[]): Promise<any | null> {
   for (const target of targets) {
-    const fields = (await safeRead(() => target?.Fields)) ?? (await safeRead(() => target?.fields));
+    const fields = await readCallableOrValue(target, ["Fields", "fields"]);
     if (fields) return fields;
   }
   return null;
@@ -950,8 +1455,25 @@ async function readFieldResultText(field: any): Promise<string> {
 }
 
 async function readFieldCodeText(field: any): Promise<string> {
-  const codeRange = ((await safeRead(() => field?.Code)) ?? (await safeRead(() => field?.code))) || null;
+  const codeRange = await getFieldCodeRange(field);
   return codeRange ? readRangeText(codeRange) : "";
+}
+
+async function ensureCaptionReferenceFieldCharFormat(field: any, bookmarkName: string): Promise<boolean> {
+  const codeRange = await getFieldCodeRange(field);
+  if (!codeRange) return false;
+
+  const currentCodeText = await readRangeText(codeRange);
+  const nextCodeText = buildCaptionReferenceFieldCodeText(bookmarkName, currentCodeText);
+  if (!nextCodeText) return false;
+
+  const currentNormalized = String(currentCodeText || "").replace(/\s+/g, " ").trim();
+  const nextNormalized = nextCodeText.replace(/\s+/g, " ").trim();
+  if (currentNormalized === nextNormalized) return true;
+
+  return safeWrite(() => {
+    codeRange.Text = nextCodeText;
+  });
 }
 
 async function setRangeFontSize(range: any, fontSize: number): Promise<boolean> {
@@ -976,8 +1498,13 @@ async function validateInsertedField(
 async function validateAndStyleInsertedField(
   field: any,
   expectedText: string,
+  bookmarkName: string,
   styleSourceRange: any
 ): Promise<boolean> {
+  await ensureCaptionReferenceFieldCharFormat(field, bookmarkName);
+  const codeRange = await getFieldCodeRange(field);
+  if (codeRange) await copyRangeFontFormatting(styleSourceRange, codeRange);
+
   const validation = await validateInsertedField(field, expectedText);
   if (!validation.matched) {
     await deleteField(field);
@@ -986,6 +1513,7 @@ async function validateAndStyleInsertedField(
 
   const insertedRange = await getFieldResultRange(field);
   if (insertedRange) await copyRangeFontFormatting(styleSourceRange, insertedRange);
+  if (codeRange) await copyRangeFontFormatting(styleSourceRange, codeRange);
   return true;
 }
 
@@ -1011,7 +1539,7 @@ async function tryInsertFieldReference(
   if (!fields) return false;
 
   const fieldCandidates = [
-    { type: WD_FIELD_EMPTY, text: `REF ${bookmarkName}` },
+    { type: WD_FIELD_EMPTY, text: buildCaptionReferenceFieldCodeText(bookmarkName) },
     { type: WD_FIELD_REF, text: bookmarkName },
   ];
 
@@ -1028,7 +1556,7 @@ async function tryInsertFieldReference(
         const afterAddFieldCount = await getFieldCollectionCount(fields);
         const insertedField = await resolveInsertedFieldCandidate(fieldResult, fields, afterAddFieldCount > beforeAddFieldCount);
         if (!insertedField) continue;
-        if (await validateAndStyleInsertedField(insertedField, expectedText, styleSourceRange)) return true;
+        if (await validateAndStyleInsertedField(insertedField, expectedText, bookmarkName, styleSourceRange)) return true;
       } catch {
         // Try the next insertion shape.
       }
@@ -1080,7 +1608,7 @@ async function tryInsertBookmarkCrossReference(
       const insertedField = await resolveInsertedFieldCandidate(attemptResult, fields, afterAddFieldCount > beforeAddFieldCount);
       if (!insertedField) continue;
 
-      if (await validateAndStyleInsertedField(insertedField, expectedText, styleSourceRange)) return true;
+      if (await validateAndStyleInsertedField(insertedField, expectedText, bookmarkName, styleSourceRange)) return true;
     } catch {
       // Try the next insertion shape.
     }
@@ -1091,6 +1619,32 @@ async function tryInsertBookmarkCrossReference(
 
 async function createReusableRange(parentRange: any): Promise<any | null> {
   return duplicateRange(parentRange);
+}
+
+function shouldInsertCaptionReferenceAsParts(option: CaptionReferenceOption): boolean {
+  if (!option.referencePartsAreFieldBacked) return false;
+  if (!Array.isArray(option.referenceParts) || option.referenceParts.length <= 1) return false;
+  if (!option.referenceParts.some((part) => part.isField)) return false;
+  if (!option.referenceParts.every((part) => part.text && part.referenceEnd > part.referenceStart)) return false;
+  if (!option.referenceParts.every((part) => !part.isField || isSafeCaptionReferenceFieldText(part.text))) return false;
+  return normalizeCaptionReferenceResultText(option.referenceParts.map((part) => part.text).join("")) === normalizeCaptionReferenceResultText(option.referenceText);
+}
+
+async function insertLiteralCaptionReferencePart(selection: any, text: string): Promise<boolean> {
+  if (!text) return true;
+  if (await safeWrite(() => selection?.TypeText?.(text))) return true;
+  if (await safeWrite(() => selection?.typeText?.(text))) return true;
+
+  const selectionRange = await safeRead(() => selection?.Range);
+  if (!selectionRange) return false;
+  if (await safeWrite(() => {
+    selectionRange.Text = text;
+  })) {
+    await safeWrite(() => selectionRange?.Collapse?.(0));
+    await safeWrite(() => selectionRange?.collapse?.(0));
+    return true;
+  }
+  return false;
 }
 
 async function insertCaptionReferenceField(
@@ -1116,6 +1670,40 @@ async function insertCaptionReferenceField(
   return await tryInsertBookmarkCrossReference(activeDocument, selection, selectionRange, bookmarkName, expectedText, styleSourceRange);
 }
 
+async function insertCaptionReferenceParts(
+  app: any,
+  option: CaptionReferenceOption
+): Promise<boolean> {
+  const activeDocument = await getDocument(app);
+  const selection = await getSelection(app);
+  const initialSelectionRange = await selection?.Range;
+  if (!initialSelectionRange) {
+    throw new Error("未找到可用插入位置。");
+  }
+
+  await safeWrite(() => initialSelectionRange?.Collapse?.(0));
+  await safeWrite(() => initialSelectionRange?.collapse?.(0));
+
+  const styleSourceRange = (await createReusableRange(initialSelectionRange)) ?? initialSelectionRange;
+
+  for (const part of option.referenceParts) {
+    if (!part.isField) {
+      if (!(await insertLiteralCaptionReferencePart(selection, part.text))) return false;
+      continue;
+    }
+
+    const selectionRange = await selection?.Range;
+    if (!selectionRange) return false;
+    await safeWrite(() => selectionRange?.Collapse?.(0));
+    await safeWrite(() => selectionRange?.collapse?.(0));
+    if (!(await tryInsertFieldReference(activeDocument, selection, selectionRange, part.bookmarkName, part.text, styleSourceRange))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export async function listCaptionReferenceOptions(app: any, kind: CaptionReferenceType): Promise<CaptionReferenceOption[]> {
   const activeDocument = await getDocument(app);
   return getCaptionReferenceOptions(activeDocument, kind);
@@ -1135,6 +1723,26 @@ export async function insertCaptionReferenceOption(
   }
 
   const activeDocument = await getDocument(app);
+  if (shouldInsertCaptionReferenceAsParts(option)) {
+    let bookmarkCreated = false;
+    for (const part of option.referenceParts) {
+      if (!part.isField) continue;
+      const partBookmarkCreated = await addBookmarkForCaptionReferencePart(activeDocument, option, part);
+      bookmarkCreated = bookmarkCreated || partBookmarkCreated;
+    }
+
+    const inserted = await insertCaptionReferenceParts(app, option);
+    if (!inserted) {
+      throw new Error("交叉引用插入失败，当前 WPS 环境可能不支持分段 REF 域。");
+    }
+
+    return {
+      option,
+      bookmarkCreated,
+      mode: "parts",
+    };
+  }
+
   const bookmarkCreated = await addBookmarkAtRange(
     activeDocument,
     option.bookmarkName,
@@ -1153,6 +1761,7 @@ export async function insertCaptionReferenceOption(
   return {
     option,
     bookmarkCreated,
+    mode: "single",
   };
 }
 
@@ -1175,8 +1784,8 @@ export async function insertCaptionReference(
   return insertCaptionReferenceOption(app, option);
 }
 
-export async function applyCaptionReferenceFontSize(
-  app: any,
+async function applyCaptionReferenceFontSizeInDocument(
+  activeDocument: any,
   kind: CaptionReferenceType,
   fontSize: number
 ): Promise<CaptionReferenceFontSizeResult> {
@@ -1185,7 +1794,6 @@ export async function applyCaptionReferenceFontSize(
     throw new Error("请输入有效的字号。");
   }
 
-  const activeDocument = await getDocument(app);
   const fields = await getFirstAvailableFieldCollection([activeDocument]);
   if (!fields) {
     return { kind, fontSize: normalizedFontSize, matched: 0, updated: 0 };
@@ -1203,6 +1811,10 @@ export async function applyCaptionReferenceFontSize(
     if (!isCaptionReferenceBookmarkName(bookmarkName, kind)) continue;
 
     matched += 1;
+    await ensureCaptionReferenceFieldCharFormat(field, bookmarkName);
+    const codeRange = await getFieldCodeRange(field);
+    if (codeRange) await setRangeFontSize(codeRange, normalizedFontSize);
+
     await safeWrite(() => field?.Update?.());
     await safeWrite(() => field?.update?.());
 
@@ -1219,6 +1831,20 @@ export async function applyCaptionReferenceFontSize(
   };
 }
 
+export async function applyCaptionReferenceFontSize(
+  app: any,
+  kind: CaptionReferenceType,
+  fontSize: number
+): Promise<CaptionReferenceFontSizeResult> {
+  const normalizedFontSize = Number(fontSize);
+  if (!Number.isFinite(normalizedFontSize) || normalizedFontSize <= 0) {
+    throw new Error("请输入有效的字号。");
+  }
+
+  const activeDocument = await getDocument(app);
+  return applyCaptionReferenceFontSizeInDocument(activeDocument, kind, normalizedFontSize);
+}
+
 export async function applyAllCaptionReferenceFontSize(
   app: any,
   fontSize: number
@@ -1228,8 +1854,9 @@ export async function applyAllCaptionReferenceFontSize(
     throw new Error("请输入有效的字号。");
   }
 
-  const figures = await applyCaptionReferenceFontSize(app, "figure", normalizedFontSize);
-  const tables = await applyCaptionReferenceFontSize(app, "table", normalizedFontSize);
+  const activeDocument = await getDocument(app);
+  const figures = await applyCaptionReferenceFontSizeInDocument(activeDocument, "figure", normalizedFontSize);
+  const tables = await applyCaptionReferenceFontSizeInDocument(activeDocument, "table", normalizedFontSize);
 
   return {
     fontSize: normalizedFontSize,
