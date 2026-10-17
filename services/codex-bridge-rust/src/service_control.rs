@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use std::{
+    collections::VecDeque,
     env,
     ffi::OsString,
     fs::{self, File, OpenOptions},
@@ -23,10 +24,18 @@ const PANEL_PORT: u16 = 5173;
 const LEGACY_PANEL_PORT: u16 = 5174;
 const LOOPBACK_HOST: &str = "127.0.0.1";
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+/// 用户主动停止 bridge 时写入的标记文件；宿主看护据此不再自动拉起。
+const BRIDGE_PAUSE_MARKER: &str = "bridge-paused.marker";
+/// 看护探活间隔。
+const WATCHDOG_INTERVAL_SECONDS: u64 = 15;
+/// 看护统计窗口内允许的最大重启次数，避免反复崩溃时形成重启风暴。
+const WATCHDOG_MAX_RESTARTS: usize = 5;
+const WATCHDOG_WINDOW_SECONDS: u64 = 600;
 
 #[derive(Debug, Clone)]
 pub struct ServiceControlContext {
-    pub project_root: PathBuf,
+    /// 运行根目录：仓库模式为仓库根，安装模式为 exe 所在目录。
+    pub runtime_root: PathBuf,
     pub logs_dir: PathBuf,
 }
 
@@ -76,26 +85,40 @@ struct ParsedHttpUrl {
     path: String,
 }
 
-/// 项目根目录的定位实现见 `crate::layout`。
-pub fn detect_project_root() -> Result<PathBuf> {
-    let layout = crate::layout::detect_layout();
-    match layout.project_root {
-        Some(root) => Ok(root),
-        None => bail!(
-            "当前为安装目录模式（{}），没有源码仓库可供启动脚本使用",
-            layout.exe_dir.display()
-        ),
-    }
-}
-
+/// 构建服务控制上下文。`runtime_root` 在仓库模式下是仓库根目录，
+/// 在安装模式下是 exe 所在目录；两种模式下的日志都放在其 `logs` 子目录。
 pub fn detect_context() -> Result<ServiceControlContext> {
-    build_context(detect_project_root()?)
+    let layout = crate::layout::detect_layout();
+    let runtime_root = layout
+        .project_root
+        .clone()
+        .unwrap_or_else(|| layout.exe_dir.clone());
+    fs::create_dir_all(&layout.logs_dir)?;
+    Ok(ServiceControlContext {
+        runtime_root,
+        logs_dir: layout.logs_dir.clone(),
+    })
 }
 
-pub fn build_context(project_root: PathBuf) -> Result<ServiceControlContext> {
-    let logs_dir = project_root.join("logs");
-    fs::create_dir_all(&logs_dir)?;
-    Ok(ServiceControlContext { project_root, logs_dir })
+fn bridge_pause_marker(logs_dir: &Path) -> PathBuf {
+    logs_dir.join(BRIDGE_PAUSE_MARKER)
+}
+
+/// 标记 bridge 为「用户主动停止」。
+fn mark_bridge_paused(logs_dir: &Path) -> Result<()> {
+    let marker = bridge_pause_marker(logs_dir);
+    fs::write(&marker, b"stopped\n")
+        .with_context(|| format!("写入停止标记失败: {}", marker.display()))
+}
+
+/// 清除「用户主动停止」标记，返回清除前标记是否存在。
+fn clear_bridge_pause(logs_dir: &Path) -> Result<bool> {
+    let marker = bridge_pause_marker(logs_dir);
+    if !marker.exists() {
+        return Ok(false);
+    }
+    fs::remove_file(&marker).with_context(|| format!("清除停止标记失败: {}", marker.display()))?;
+    Ok(true)
 }
 
 pub async fn start_services(
@@ -112,11 +135,32 @@ pub async fn start_services(
         }
     };
 
-    if let Err(error) = logger.log(format!("Start requested. root={}", context.project_root.display())) {
+    if let Err(error) = logger.log(format!("Start requested. root={}", context.runtime_root.display())) {
         return Err(ServiceControlFailure {
             output: logger.output(),
             message: error.to_string(),
         });
+    }
+
+    // 显式启动即代表用户恢复服务，清掉上次「手动停止」的标记，看护重新生效。
+    match clear_bridge_pause(&context.logs_dir) {
+        Ok(true) => {
+            if let Err(error) = logger.log("已清除「用户停止」标记，恢复自动看护") {
+                return Err(ServiceControlFailure {
+                    output: logger.output(),
+                    message: error.to_string(),
+                });
+            }
+        }
+        Ok(false) => {}
+        Err(error) => {
+            if let Err(log_error) = logger.log(format!("清除停止标记失败: {error}")) {
+                return Err(ServiceControlFailure {
+                    output: logger.output(),
+                    message: log_error.to_string(),
+                });
+            }
+        }
     }
 
     let addon_host = addon_host_check();
@@ -133,7 +177,7 @@ pub async fn start_services(
         }
 
         if !test_http_content(&addon_host).await {
-            if let Err(error) = start_npm_script(context, &mut logger, "addin:host").await {
+            if let Err(error) = start_self_service(context, &mut logger, "addon-host").await {
                 return Err(ServiceControlFailure {
                     output: logger.output(),
                     message: error.to_string(),
@@ -160,7 +204,7 @@ pub async fn start_services(
     }
 
     if !test_http_content(&bridge).await {
-        if let Err(error) = start_npm_script(context, &mut logger, "bridge:dev").await {
+        if let Err(error) = start_self_service(context, &mut logger, "bridge").await {
             return Err(ServiceControlFailure {
                 output: logger.output(),
                 message: error.to_string(),
@@ -245,9 +289,15 @@ pub async fn start_services(
 }
 
 pub async fn stop_services(
-    _context: &ServiceControlContext,
+    context: &ServiceControlContext,
 ) -> std::result::Result<String, ServiceControlFailure> {
     let mut failures = Vec::new();
+
+    // 先打停止标记，避免宿主看护在关闭过程中把 bridge 重新拉起。
+    if let Err(error) = mark_bridge_paused(&context.logs_dir) {
+        failures.push(error.to_string());
+    }
+
     for port in [BRIDGE_PORT, PANEL_PORT, LEGACY_PANEL_PORT] {
         match find_port_owners(port).await {
             Ok(owners) => {
@@ -262,7 +312,7 @@ pub async fn stop_services(
     }
 
     let output = format!(
-        "Stopped local Codex bridge/panel services on ports: {}, {}, {}",
+        "Stopped local Codex bridge services on ports: {}, {}, {} (auto-restart paused)",
         BRIDGE_PORT, PANEL_PORT, LEGACY_PANEL_PORT
     );
     if failures.is_empty() {
@@ -378,6 +428,88 @@ fn panel_check() -> ServiceCheck {
     }
 }
 
+/// 探活用短超时，避免 bridge 卡死时看护被拖住。
+fn bridge_probe() -> ServiceCheck {
+    ServiceCheck {
+        timeout_seconds: 5,
+        ..bridge_check()
+    }
+}
+
+/// 看护日志：控制台 + `logs/supervisor.log`。
+fn watchdog_log(logs_dir: &Path, message: &str) {
+    println!("[watchdog] {message}");
+    let path = logs_dir.join("supervisor.log");
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(file, "[{}] {}", now_millis(), message);
+    }
+}
+
+/// 统计窗口内的重启预算：允许则登记本次重启并返回 `true`。
+fn restart_allowed(restarts: &mut VecDeque<Instant>, now: Instant) -> bool {
+    let window = Duration::from_secs(WATCHDOG_WINDOW_SECONDS);
+    while matches!(restarts.front(), Some(at) if now.duration_since(*at) > window) {
+        restarts.pop_front();
+    }
+    if restarts.len() >= WATCHDOG_MAX_RESTARTS {
+        return false;
+    }
+    restarts.push_back(now);
+    true
+}
+
+/// 宿主内建的 bridge 看护：bridge 静默退出后自动拉起。
+///
+/// 面板和 bridge 由同一个宿主进程托管，bridge 掉线时用户只会看到「服务不可用」，
+/// 这里补上自愈，避免每次都要求用户手动点「启动本地服务」。
+pub async fn run_bridge_watchdog() {
+    let context = match detect_context() {
+        Ok(context) => context,
+        Err(error) => {
+            eprintln!("[watchdog] 无法初始化看护: {error}");
+            return;
+        }
+    };
+
+    let marker = bridge_pause_marker(&context.logs_dir);
+    let probe = bridge_probe();
+    let mut restarts: VecDeque<Instant> = VecDeque::new();
+    let mut pause_logged = false;
+
+    loop {
+        sleep(Duration::from_secs(WATCHDOG_INTERVAL_SECONDS)).await;
+
+        if marker.exists() {
+            if !pause_logged {
+                watchdog_log(&context.logs_dir, "bridge 已被手动停止，看护暂停");
+                pause_logged = true;
+            }
+            continue;
+        }
+        pause_logged = false;
+
+        if test_http_content(&probe).await {
+            continue;
+        }
+
+        // 二次确认，避免刚好撞上启动窗口。
+        sleep(Duration::from_secs(3)).await;
+        if test_http_content(&probe).await {
+            continue;
+        }
+
+        if !restart_allowed(&mut restarts, Instant::now()) {
+            watchdog_log(&context.logs_dir, "bridge 反复无法启动，本窗口内不再自动拉起");
+            continue;
+        }
+
+        match start_self_service_detached(&context, "bridge").await {
+            Ok(()) => watchdog_log(&context.logs_dir, "bridge 不可达，已自动重新拉起"),
+            Err(error) => watchdog_log(&context.logs_dir, &format!("自动拉起 bridge 失败: {error}")),
+        }
+    }
+}
+
 impl ServiceLogger {
     fn with_log_file(path: PathBuf) -> Result<Self> {
         let file = OpenOptions::new()
@@ -405,27 +537,39 @@ impl ServiceLogger {
     }
 }
 
-async fn start_npm_script(
+/// 用当前可执行文件本身拉起子服务（`addon-host` / `bridge`）。
+///
+/// 这是打包后的关键路径：运行期不再依赖 Node 与 npm 脚本。
+async fn start_self_service(
     context: &ServiceControlContext,
     logger: &mut ServiceLogger,
-    script_name: &str,
+    mode_arg: &str,
 ) -> Result<()> {
-    let npm = resolve_npm_cmd()?;
-    let safe_name = sanitize_log_name(&format!("npm-{script_name}"));
-    let args = [OsString::from("run"), OsString::from(script_name)];
-    spawn_logged_process(context, logger, &safe_name, &npm, &args, &context.project_root).await
+    let (exe, args) = self_service_command(mode_arg)?;
+    logger.log(format!("Starting {mode_arg}: {} {mode_arg}", exe.display()))?;
+    spawn_detached_process(&context.logs_dir, mode_arg, &exe, &args, &context.runtime_root).await
 }
 
-async fn spawn_logged_process(
-    context: &ServiceControlContext,
-    logger: &mut ServiceLogger,
+/// 不带 logger 的自拉起，供看护在后台使用。
+async fn start_self_service_detached(context: &ServiceControlContext, mode_arg: &str) -> Result<()> {
+    let (exe, args) = self_service_command(mode_arg)?;
+    spawn_detached_process(&context.logs_dir, mode_arg, &exe, &args, &context.runtime_root).await
+}
+
+fn self_service_command(mode_arg: &str) -> Result<(PathBuf, Vec<OsString>)> {
+    let exe = env::current_exe().context("无法定位当前可执行文件")?;
+    Ok((exe, vec![OsString::from(mode_arg)]))
+}
+
+async fn spawn_detached_process(
+    logs_dir: &Path,
     name: &str,
     file_path: &Path,
     args: &[OsString],
     working_dir: &Path,
 ) -> Result<()> {
-    let stdout_path = context.logs_dir.join(format!("{name}.out.log"));
-    let stderr_path = context.logs_dir.join(format!("{name}.err.log"));
+    let stdout_path = logs_dir.join(format!("{name}.out.log"));
+    let stderr_path = logs_dir.join(format!("{name}.err.log"));
     OpenOptions::new()
         .create(true)
         .append(true)
@@ -436,19 +580,8 @@ async fn spawn_logged_process(
         .append(true)
         .open(&stderr_path)
         .with_context(|| format!("打开日志文件失败: {}", stderr_path.display()))?;
-    let printable_args = args
-        .iter()
-        .map(|value| value.to_string_lossy().to_string())
-        .collect::<Vec<_>>()
-        .join(" ");
-    logger.log(format!(
-        "Starting {}: {} {}",
-        name,
-        file_path.display(),
-        printable_args
-    ))?;
 
-    let launcher_path = context.logs_dir.join(format!("{name}.cmd"));
+    let launcher_path = logs_dir.join(format!("{name}.cmd"));
     let launcher_content = build_launcher_script(working_dir, file_path, args, &stdout_path, &stderr_path);
     fs::write(&launcher_path, launcher_content)
         .with_context(|| format!("写入启动脚本失败: {}", launcher_path.display()))?;
@@ -478,35 +611,6 @@ async fn spawn_logged_process(
         .spawn()
         .with_context(|| format!("启动进程失败: {}", file_path.display()))?;
     Ok(())
-}
-
-fn resolve_npm_cmd() -> Result<PathBuf> {
-    if let Some(path) = find_executable_in_path("npm.cmd") {
-        return Ok(path);
-    }
-
-    let fallbacks = [
-        env::var_os("ProgramFiles").map(|value| PathBuf::from(value).join("nodejs").join("npm.cmd")),
-        env::var_os("ProgramFiles(x86)")
-            .map(|value| PathBuf::from(value).join("nodejs").join("npm.cmd")),
-        env::var_os("APPDATA").map(|value| PathBuf::from(value).join("npm").join("npm.cmd")),
-    ];
-
-    for candidate in fallbacks.into_iter().flatten() {
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-
-    bail!("Cannot find executable: npm.cmd")
-}
-
-fn sanitize_log_name(name: &str) -> String {
-    let mut sanitized = name.to_string();
-    for ch in ['\\', '/', ':', '*', '?', '"', '<', '>', '|'] {
-        sanitized = sanitized.replace(ch, "-");
-    }
-    sanitized
 }
 
 fn build_launcher_script(
@@ -543,14 +647,6 @@ fn quote_cmd_text(text: &str) -> String {
     format!("\"{}\"", text.replace('"', "\"\""))
 }
 
-fn find_executable_in_path(name: &str) -> Option<PathBuf> {
-    env::var_os("PATH").and_then(|value| {
-        env::split_paths(&value)
-            .map(|entry| entry.join(name))
-            .find(|candidate| candidate.is_file())
-    })
-}
-
 async fn clear_stale_project_process(
     context: &ServiceControlContext,
     logger: &mut ServiceLogger,
@@ -560,7 +656,7 @@ async fn clear_stale_project_process(
     let owners = find_port_owners(port).await?;
     for pid in owners {
         if let Some(process) = process_details(pid) {
-            if belongs_to_project(&process, &context.project_root) {
+            if belongs_to_project(&process, &context.runtime_root) {
                 logger.log(format!(
                     "Stopping stale {} owner on port {}: pid={} {}",
                     service_name, port, process.pid, process.name
@@ -885,12 +981,57 @@ mod tests {
     }
 
     #[test]
-    fn detect_project_root_resolves_current_repository() {
-        let root = detect_project_root().expect("定位项目根目录");
-        assert!(
-            crate::layout::is_project_root(&root),
-            "定位到的目录必须包含 apps/wps-local-addin：{}",
-            root.display()
+    fn detect_context_uses_layout_paths() {
+        let context = detect_context().expect("构建服务控制上下文");
+        let layout = crate::layout::detect_layout();
+        assert_eq!(context.logs_dir, layout.logs_dir);
+        assert_eq!(context.runtime_root, layout.project_root.expect("仓库模式应有根目录"));
+    }
+
+    #[test]
+    fn launcher_script_starts_current_exe_without_npm() {
+        let script = build_launcher_script(
+            Path::new("E:/repo"),
+            Path::new("E:/repo/service.exe"),
+            &[OsString::from("bridge")],
+            Path::new("E:/repo/logs/bridge.out.log"),
+            Path::new("E:/repo/logs/bridge.err.log"),
         );
+
+        assert!(script.contains("cd /d \"E:/repo\""));
+        assert!(script.contains("\"E:/repo/service.exe\" \"bridge\""));
+        assert!(!script.to_ascii_lowercase().contains("npm"));
+    }
+
+    #[test]
+    fn bridge_pause_marker_is_marked_and_cleared() {
+        let logs_dir = std::env::temp_dir().join(format!("codex-pause-{}", std::process::id()));
+        std::fs::create_dir_all(&logs_dir).expect("创建日志目录");
+
+        assert_eq!(clear_bridge_pause(&logs_dir).expect("清除未设置的标记"), false);
+
+        mark_bridge_paused(&logs_dir).expect("写入停止标记");
+        assert!(bridge_pause_marker(&logs_dir).exists());
+        assert_eq!(clear_bridge_pause(&logs_dir).expect("清除停止标记"), true);
+        assert!(!bridge_pause_marker(&logs_dir).exists());
+        assert_eq!(clear_bridge_pause(&logs_dir).expect("重复清除"), false);
+
+        std::fs::remove_dir_all(&logs_dir).ok();
+    }
+
+    #[test]
+    fn restart_budget_limits_restarts_within_window() {
+        let start = Instant::now();
+        let mut restarts = VecDeque::new();
+
+        for _ in 0..WATCHDOG_MAX_RESTARTS {
+            assert!(restart_allowed(&mut restarts, start));
+        }
+        assert!(!restart_allowed(&mut restarts, start));
+
+        // 窗口过期后预算恢复。
+        let later = start + Duration::from_secs(WATCHDOG_WINDOW_SECONDS + 1);
+        assert!(restart_allowed(&mut restarts, later));
+        assert_eq!(restarts.len(), 1);
     }
 }

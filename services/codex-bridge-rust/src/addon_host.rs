@@ -1,5 +1,7 @@
 use crate::layout;
-use crate::service_control::{check_services, detect_context, start_services, stop_services};
+use crate::service_control::{
+    check_services, detect_context, run_bridge_watchdog, start_services, stop_services,
+};
 use anyhow::{bail, Result};
 use axum::{
     extract::{Path, State},
@@ -88,6 +90,10 @@ pub async fn run() -> Result<()> {
         state.addin_root.display(),
         panel_url
     );
+
+    // 宿主进程常驻，顺带看护 bridge：掉线且非用户主动停止时自动拉起。
+    tokio::spawn(run_bridge_watchdog());
+
     axum::serve(listener, app).await?;
     Ok(())
 }

@@ -175,11 +175,11 @@
 已完成：
 - 面板静态化：`npm run panel:build` 产出 `apps/wps-panel/dist`，由加载项宿主在 `3889/panel/` 提供，运行时不再依赖 vite dev server。
 - 运行期布局解析（`services/codex-bridge-rust/src/layout.rs`）：区分 `repo` / `installed` 两种模式，配置与日志不再依赖编译期路径。
+- 服务自举：`services start` 用可执行文件自身拉起 `addon-host` / `bridge`，运行期不再依赖 npm 脚本。
+- 宿主内建 bridge 看护：15 秒探活、掉线自动重启、重启限流，用户主动停止时通过 `logs/bridge-paused.marker` 暂停看护。
 
 待办：
-- 服务自举：`services start` 直接拉起自身进程，去掉对 `npm run` 的运行时依赖。
-- 宿主内建 bridge 看护：掉线自动重启。
-- exe 内置 `install` / `uninstall` / `doctor`：注册 `publish.xml`、开机自启、环境自检。
+- 加载项注册与开机自启逻辑移植进 exe，新增 `install` / `uninstall` / `doctor`，PowerShell 脚本改为薄包装。
 - 资源内嵌（`include_dir!`）与 release 打包：`-C target-feature=+crt-static` 产出无外部依赖的单文件。
 
 验收标准：
@@ -207,11 +207,10 @@
 
 ## 最近下一步
 
-推进 `P7 单文件 exe 分发`，当前处于「服务自举 + 看护」阶段。
+推进 `P7 单文件 exe 分发`，服务自举与看护已完成，进入「安装/卸载自举 + 资源内嵌」阶段。
 
 具体任务：
-1. `services start` 改为用 `current_exe()` 拉起 addon-host 与 bridge，去掉运行时 npm 依赖。
-2. 宿主服务内建 bridge 探活与自动重启（带退避）。
-3. 把加载项注册与开机自启逻辑移植进 exe，新增 `install` / `uninstall` / `doctor`。
-4. 用 `include_dir!` 内嵌面板与加载项资源，release + `+crt-static` 出单文件。
-5. 在无 Node 环境端到端验收。
+1. 把加载项注册（`publish.xml`/`ribbon.xml`）与开机自启逻辑移植进 exe，新增 `install` / `uninstall` / `doctor`。
+2. PowerShell 安装与启动脚本改为薄包装，只调用 exe 子命令，消除重复实现。
+3. 用 `include_dir!` 内嵌面板与加载项资源，release + `+crt-static` 出单文件。
+4. 在无 Node 环境端到端验收（安装 → 选项卡 → 面板 → 问答 → 写回 → 卸载无残留）。
