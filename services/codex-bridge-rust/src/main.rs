@@ -3,6 +3,7 @@ mod assets;
 mod config;
 mod codex_runner;
 mod diff_popup;
+mod layout;
 mod protocol;
 mod server;
 mod service_control;

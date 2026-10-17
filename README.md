@@ -19,6 +19,17 @@ shared/                    # 前后端共享类型
 docs/                      # 设计文档
 ```
 
+## 运行期目录布局
+
+打包后的 exe 不能假设自己位于源码仓库内，因此路径在启动时解析（实现见 `services/codex-bridge-rust/src/layout.rs`），可执行文件的位置决定模式：
+
+| 模式 | 判定 | 配置 | 日志 | 静态资源 |
+|---|---|---|---|---|
+| `repo` | exe 位于源码仓库内 | `services/codex-bridge-rust/config.local.json` | `<仓库根>/logs` | `apps/wps-local-addin`、`apps/wps-panel/dist` |
+| `installed` | exe 被拷贝到仓库外（安装目录） | `<exe 同目录>/config.json` | `<exe 同目录>/logs` | `<exe 同目录>/addin`、`<exe 同目录>/panel` |
+
+`installed` 是打包发布的目标形态；面板静态资源后续会内嵌进 exe。两种模式都可用环境变量覆盖：`CODEX_BRIDGE_CONFIG_PATH`（配置文件）、`CODEX_CLI_PATH`、`CODEX_WORKING_DIR`。
+
 ## 下一步开发顺序（建议）
 
 详见 [Development Roadmap](docs/development-roadmap.md)。
@@ -65,19 +76,21 @@ docs/                      # 设计文档
    - `cd apps/wps-local-addin && npm install`
 2. 配置 bridge（两种方式任选其一）：
    - 环境变量：`CODEX_WORKING_DIR`（必填）、`CODEX_CLI_PATH`（可选）
-   - 或复制 `services/codex-bridge-rust/config.example.json` 为 `services/codex-bridge-rust/config.local.json` 并填写
+   - 或复制 `services/codex-bridge-rust/config.example.json` 为 `services/codex-bridge-rust/config.local.json` 并填写（仓库模式下的配置位置，见「运行期目录布局」）
 3. 启动 bridge（根目录）：
    - `npm run bridge:dev`
    - 这是 Rust 版桥接服务；如果你想对照旧实现，可用 `npm run bridge:dev:legacy`
    - 首次运行及修改 Rust 源码后先执行 `npm run rust:build`（构建需要 Rust 工具链），日常启动使用已构建程序。
-4. 启动面板页（根目录）：
-   - `npm run panel:dev`
+4. 构建面板静态产物（根目录）：
+   - `npm run panel:build`
+   - 产物写入 `apps/wps-panel/dist`，由加载项宿主在 `http://127.0.0.1:3889/panel/` 下提供
+   - 需要热更新调试时改用 `npm run panel:dev`，再在 WPS 里用「设置面板地址」把面板指向 `http://127.0.0.1:5173/index.html`
 5. 注册并启动本地加载项宿主服务（根目录）：
    - `npm run addin:register`
    - `npm run addin:host`
    - `addin:host` 现在默认启动 Rust 宿主；如需回退旧实现，可用 `npm run addin:host:legacy`
 6. WPS 打开后，在 `Codex` 选项卡点击 `打开 Codex 面板`：
-   - 默认会打开 `http://127.0.0.1:5173/index.html`
+   - 默认会打开 `http://127.0.0.1:3889/panel/index.html`
    - 面板会直接使用本地 `Application` 读写当前文档选区
 
 ## 一键启动
@@ -95,18 +108,18 @@ docs/                      # 设计文档
   - `start-wps-codex.cmd`
 - 从 PowerShell 关闭 bridge 和面板服务：
   - `npm run stop:wps-codex`
-  - 现在默认走 Rust `services stop` 子命令，保留 `3889` 宿主，仅关闭 bridge 和面板服务
+  - 现在默认走 Rust `services stop` 子命令，保留 `3889` 宿主，仅关闭 bridge，并清理遗留的面板 dev server（5173/5174）
 - 从 PowerShell 检查本地服务状态：
   - `npm run services:check`
 - 从资源管理器双击关闭：
   - `stop-wps-codex.cmd`
 - 从 WPS 的 `Codex` 选项卡启动本地服务：
   - 点击 `启动本地服务`
-  - 该按钮现在由 Rust 宿主内建的 `start` 动作处理，会拉起加载项宿主服务（3889）+ Rust bridge（32123）+ 面板 dev server（5173）
+  - 该按钮现在由 Rust 宿主内建的 `start` 动作处理，会拉起加载项宿主服务（3889）与 Rust bridge（32123）；面板是宿主提供的静态资源，不再是独立进程
   - 前提是 WPS 加载项自身已经加载成功
 - 从 WPS 的 `Codex` 选项卡关闭本地服务：
   - 点击 `关闭本地服务`
-  - 该按钮现在由 Rust 宿主内建的 `stop` 动作处理，会关闭 bridge 和面板 dev server，但保留 WPS 加载项调试服务
+  - 该按钮现在由 Rust 宿主内建的 `stop` 动作处理，会关闭 bridge，并清理遗留的面板 dev server（5173/5174），但保留 WPS 加载项调试服务
 
 ## 面板能力
 
@@ -118,6 +131,6 @@ docs/                      # 设计文档
 
 ## WebOffice 联调（仅在线文档）
 
-- 调试地址：`http://127.0.0.1:5173/host.html`
+- 先运行 `npm run panel:dev` 提供调试页，再访问：`http://127.0.0.1:5173/host.html`
 - 需填写 `SDK URL`、`appId`、`fileId`
 - 该路径只用于 WebOffice，不用于本地 WPS 文档

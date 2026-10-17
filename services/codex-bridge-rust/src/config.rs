@@ -35,7 +35,7 @@ fn config_path() -> PathBuf {
     if let Some(path) = non_empty(env::var("CODEX_BRIDGE_CONFIG_PATH").ok()) {
         return PathBuf::from(path);
     }
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("config.local.json")
+    crate::layout::detect_layout().config_file
 }
 
 fn home_dir() -> PathBuf {

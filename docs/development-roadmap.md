@@ -24,7 +24,7 @@
 已完成：
 - WPS ribbon 启动本地服务时使用 `powershell.exe -NoProfile -ExecutionPolicy Bypass`。
 - `scripts/start-local-services.ps1` 写入 `logs/start-local-services.log`。
-- 启动后轮询确认 `3889`、`32123`、`5173` 端口。
+- 启动后轮询确认 `3889`、`32123` 端口，并确认 `3889/panel/index.html` 能返回面板页面（面板改为宿主提供的静态资源，不再占用 `5173`）。
 - 解析 `npm.cmd` 的完整路径，降低 WPS 进程 PATH 不完整导致的失败概率。
 - `addin:host` 保持为加载项宿主统一入口，当前默认已切到 Rust 宿主，用户操作方式保持不变。
 - Rust 宿主已内建 `start/stop/check` 运行时控制逻辑，WPS 按钮不再回调旧 PowerShell 服务控制脚本。
@@ -36,7 +36,7 @@
 - `stop-local-services.ps1` 只停止本项目启动的服务，减少误杀同端口开发服务的风险。
 
 验收标准：
-1. 在 WPS 中点击“启动本地服务”后，`3889/32123/5173` 均可监听。
+1. 在 WPS 中点击“启动本地服务”后，`3889/32123` 均可监听，且 `3889/panel/index.html` 返回面板页面。
 2. 失败时能在 `logs/start-local-services.log` 定位原因。
 3. 重复点击启动不会重复创建同端口服务或弹出误导性成功状态。
 
@@ -168,6 +168,25 @@
 2. 报告包含问题位置、原文片段、建议修改。
 3. 用户可逐条选择是否应用修改。
 
+### P7 单文件 exe 分发
+
+目标：把「装 Node + Rust 工具链 + 手动构建」的安装流程，压缩成「双击一个 exe」。
+
+已完成：
+- 面板静态化：`npm run panel:build` 产出 `apps/wps-panel/dist`，由加载项宿主在 `3889/panel/` 提供，运行时不再依赖 vite dev server。
+- 运行期布局解析（`services/codex-bridge-rust/src/layout.rs`）：区分 `repo` / `installed` 两种模式，配置与日志不再依赖编译期路径。
+
+待办：
+- 服务自举：`services start` 直接拉起自身进程，去掉对 `npm run` 的运行时依赖。
+- 宿主内建 bridge 看护：掉线自动重启。
+- exe 内置 `install` / `uninstall` / `doctor`：注册 `publish.xml`、开机自启、环境自检。
+- 资源内嵌（`include_dir!`）与 release 打包：`-C target-feature=+crt-static` 产出无外部依赖的单文件。
+
+验收标准：
+1. 在没有 Node / Rust 的机器上，只放一个 exe，双击安装后 WPS 出现 Codex 选项卡且面板可问答。
+2. 重启电脑后自启生效；卸载后 `publish.xml`、自启项、进程、目录均无残留。
+3. 现有 JS / Rust 测试全绿。
+
 ## 模块拆分建议
 
 短期保持原生 TypeScript + DOM，不引入前端框架。
@@ -188,11 +207,11 @@
 
 ## 最近下一步
 
-下一项优先做 `P2 写回前 Diff 审核`。
+推进 `P7 单文件 exe 分发`，当前处于「服务自举 + 看护」阶段。
 
 具体任务：
-1. 新增纯文本 Diff 计算。
-2. 新增 Diff 确认弹窗。
-3. 将“写回选区”和 agent 自动写回都接入确认流程。
-4. 执行 `npx tsc --noEmit`。
-5. 在 WPS 中验证接受/拒绝都符合预期。
+1. `services start` 改为用 `current_exe()` 拉起 addon-host 与 bridge，去掉运行时 npm 依赖。
+2. 宿主服务内建 bridge 探活与自动重启（带退避）。
+3. 把加载项注册与开机自启逻辑移植进 exe，新增 `install` / `uninstall` / `doctor`。
+4. 用 `include_dir!` 内嵌面板与加载项资源，release + `+crt-static` 出单文件。
+5. 在无 Node 环境端到端验收。

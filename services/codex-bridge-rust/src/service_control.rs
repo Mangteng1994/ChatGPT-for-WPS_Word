@@ -76,43 +76,16 @@ struct ParsedHttpUrl {
     path: String,
 }
 
-/// 项目根目录的定位标识：只有真正的仓库根目录才同时包含这两级目录。
-const PROJECT_MARKER: [&str; 2] = ["apps", "wps-local-addin"];
-/// 向上查找的最大层数，足以覆盖 `services/<crate>/` 这类嵌套位置。
-const PROJECT_SEARCH_DEPTH: usize = 8;
-
-fn is_project_root(candidate: &Path) -> bool {
-    candidate
-        .join(PROJECT_MARKER[0])
-        .join(PROJECT_MARKER[1])
-        .is_dir()
-}
-
-fn find_project_root(start: &Path) -> Option<PathBuf> {
-    let mut current = Some(start);
-    for _ in 0..PROJECT_SEARCH_DEPTH {
-        let dir = current?;
-        if is_project_root(dir) {
-            return Some(dir.to_path_buf());
-        }
-        current = dir.parent();
-    }
-    None
-}
-
+/// 项目根目录的定位实现见 `crate::layout`。
 pub fn detect_project_root() -> Result<PathBuf> {
-    if let Ok(cwd) = env::current_dir() {
-        if let Some(root) = find_project_root(&cwd) {
-            return Ok(root);
-        }
+    let layout = crate::layout::detect_layout();
+    match layout.project_root {
+        Some(root) => Ok(root),
+        None => bail!(
+            "当前为安装目录模式（{}），没有源码仓库可供启动脚本使用",
+            layout.exe_dir.display()
+        ),
     }
-
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if let Some(root) = find_project_root(&manifest_dir) {
-        return Ok(root);
-    }
-
-    bail!("无法定位项目根目录：未找到 apps/wps-local-addin")
 }
 
 pub fn detect_context() -> Result<ServiceControlContext> {
@@ -912,28 +885,10 @@ mod tests {
     }
 
     #[test]
-    fn find_project_root_walks_up_from_nested_crate() {
-        let sandbox = std::env::temp_dir().join(format!("codex-bridge-rust-root-{}", std::process::id()));
-        let repository = sandbox.join("repo");
-        let crate_dir = repository.join("services").join("codex-bridge-rust");
-        std::fs::create_dir_all(repository.join("apps").join("wps-local-addin")).expect("创建定位标识");
-        std::fs::create_dir_all(&crate_dir).expect("创建 crate 目录");
-
-        assert_eq!(find_project_root(&crate_dir), Some(repository.clone()));
-        assert_eq!(
-            find_project_root(&repository.join("services")),
-            Some(repository.clone())
-        );
-        assert_eq!(find_project_root(&sandbox.join("elsewhere")), None);
-
-        std::fs::remove_dir_all(&sandbox).ok();
-    }
-
-    #[test]
     fn detect_project_root_resolves_current_repository() {
         let root = detect_project_root().expect("定位项目根目录");
         assert!(
-            is_project_root(&root),
+            crate::layout::is_project_root(&root),
             "定位到的目录必须包含 apps/wps-local-addin：{}",
             root.display()
         );

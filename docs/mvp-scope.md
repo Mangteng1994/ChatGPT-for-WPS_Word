@@ -44,7 +44,7 @@
 
 ## Runtime Config (Bridge)
 
-- 优先级：环境变量 > `services/codex-bridge-rust/config.local.json`
+- 优先级：环境变量 > 本地配置文件（`repo` 模式为 `services/codex-bridge-rust/config.local.json`，`installed` 模式为 exe 同目录的 `config.json`，见 README「运行期目录布局」）
 - 必填：
   - `CODEX_WORKING_DIR`（或本地配置文件 `workingDir`）
 - 可选：

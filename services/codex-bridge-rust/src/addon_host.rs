@@ -1,6 +1,5 @@
-use crate::service_control::{
-    build_context, check_services, detect_project_root, start_services, stop_services,
-};
+use crate::layout;
+use crate::service_control::{check_services, detect_context, start_services, stop_services};
 use anyhow::{bail, Result};
 use axum::{
     extract::{Path, State},
@@ -19,7 +18,6 @@ use tokio::net::TcpListener;
 
 #[derive(Clone)]
 struct AddonHostState {
-    project_root: PathBuf,
     addin_root: PathBuf,
     panel_root: PathBuf,
     panel_url: String,
@@ -47,14 +45,18 @@ pub async fn run() -> Result<()> {
         .and_then(|value| value.parse::<u16>().ok())
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_PORT);
-    let project_root = detect_project_root()?;
-    let addin_root = project_root.join("apps").join("wps-local-addin");
+    let layout = layout::detect_layout();
+    let addin_root = layout.addin_root.clone();
     if !addin_root.is_dir() {
-        bail!("WPS add-in root not found: {}", addin_root.display());
+        bail!(
+            "WPS add-in 资源目录不存在：{}（{}）",
+            addin_root.display(),
+            layout.describe()
+        );
     }
-    let panel_root = project_root.join("apps").join("wps-panel").join("dist");
+    let panel_root = layout.panel_root.clone();
     let panel_url = format!("http://{}:{}{}/index.html", HOST, port, PANEL_URL_PREFIX);
-    let logs_dir = project_root.join("logs");
+    let logs_dir = layout.logs_dir.clone();
     fs::create_dir_all(&logs_dir)?;
 
     if !panel_root.is_dir() {
@@ -66,7 +68,6 @@ pub async fn run() -> Result<()> {
     }
 
     let state = AddonHostState {
-        project_root,
         addin_root,
         panel_root,
         panel_url: panel_url.clone(),
@@ -80,9 +81,10 @@ pub async fn run() -> Result<()> {
 
     let listener = TcpListener::bind((HOST, port)).await?;
     println!(
-        "wps-addon-host listening on http://{}:{} (addin={}, panel={})",
+        "wps-addon-host listening on http://{}:{} ({}, addin={}, panel={})",
         HOST,
         port,
+        layout.describe(),
         state.addin_root.display(),
         panel_url
     );
@@ -230,7 +232,7 @@ async fn handle_service_action(
         )
     }
 
-    let context = match build_context(state.project_root.clone()) {
+    let context = match detect_context() {
         Ok(context) => context,
         Err(error) => {
             return service_response(
