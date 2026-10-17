@@ -174,6 +174,15 @@ npm run package:exe
 
 开发态与打包态的取舍：默认构建（`embedded-assets` 关闭）始终从 `apps/` 目录读资源，改完面板刷新即可生效；打包时才启用内嵌，所以日常开发不受影响。
 
+自检命令（在仓库根目录执行）：
+
+```text
+cargo test --manifest-path services/codex-bridge-rust/Cargo.toml
+cargo test --manifest-path services/codex-bridge-rust/Cargo.toml --features embedded-assets
+```
+
+两条都应全绿；第二条会额外校验内嵌资源表，需要先跑过一次 `npm run panel:build`。
+
 ## 服务自愈（宿主看护）
 
 加载项宿主（3889）常驻运行，内建 bridge 看护：
