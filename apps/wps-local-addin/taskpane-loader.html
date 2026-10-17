@@ -18,7 +18,7 @@
     <div id="status">正在启动 Codex 面板…</div>
     <script>
       (function () {
-        var fallbackTarget = "http://127.0.0.1:5173/index.html";
+        var fallbackTarget = "http://127.0.0.1:3889/panel/index.html";
         var match = /(?:^|[?&])target=([^&]+)/.exec(window.location.search || "");
         var target = fallbackTarget;
         if (match && match[1]) {

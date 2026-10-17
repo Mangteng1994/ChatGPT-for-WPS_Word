@@ -1,4 +1,4 @@
-const DEFAULT_PANEL_URL = "http://127.0.0.1:5173/index.html";
+const DEFAULT_PANEL_URL = "http://127.0.0.1:3889/panel/index.html";
 const TASKPANE_BOOTSTRAP_URL = "http://127.0.0.1:3889/taskpane-loader.html";
 const SERVICE_ACTION_PATH_PREFIX = "/__codex/service/";
 const SERVICE_ACTION_ORIGIN_FALLBACKS = ["http://127.0.0.1:3889", "http://localhost:3889"];
@@ -20,9 +20,8 @@ function getPanelUrl() {
     const saved = app.PluginStorage.getItem(PANEL_URL_KEY);
     const normalized = normalizePanelUrl(saved);
     if (normalized && normalized.indexOf("127.0.0.1:5174") >= 0) {
-      const migrated = normalized.replace("127.0.0.1:5174", "127.0.0.1:5173");
-      setPanelUrl(migrated);
-      return migrated;
+      setPanelUrl(DEFAULT_PANEL_URL);
+      return DEFAULT_PANEL_URL;
     }
     return normalized || DEFAULT_PANEL_URL;
   } catch (_err) {

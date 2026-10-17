@@ -21,6 +21,8 @@ use tokio::net::TcpListener;
 struct AddonHostState {
     project_root: PathBuf,
     addin_root: PathBuf,
+    panel_root: PathBuf,
+    panel_url: String,
     logs_dir: PathBuf,
 }
 
@@ -37,6 +39,7 @@ struct ServiceActionResponse {
 
 const HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 3889;
+const PANEL_URL_PREFIX: &str = "/panel";
 
 pub async fn run() -> Result<()> {
     let port = env::var("WPS_ADDON_PORT")
@@ -49,12 +52,24 @@ pub async fn run() -> Result<()> {
     if !addin_root.is_dir() {
         bail!("WPS add-in root not found: {}", addin_root.display());
     }
+    let panel_root = project_root.join("apps").join("wps-panel").join("dist");
+    let panel_url = format!("http://{}:{}{}/index.html", HOST, port, PANEL_URL_PREFIX);
     let logs_dir = project_root.join("logs");
     fs::create_dir_all(&logs_dir)?;
+
+    if !panel_root.is_dir() {
+        eprintln!(
+            "[wps-addon-host] WPS panel build not found at {} - run `npm run panel:build` to serve it at {}",
+            panel_root.display(),
+            panel_url
+        );
+    }
 
     let state = AddonHostState {
         project_root,
         addin_root,
+        panel_root,
+        panel_url: panel_url.clone(),
         logs_dir,
     };
 
@@ -65,13 +80,29 @@ pub async fn run() -> Result<()> {
 
     let listener = TcpListener::bind((HOST, port)).await?;
     println!(
-        "wps-addon-host listening on http://{}:{} (root={})",
+        "wps-addon-host listening on http://{}:{} (addin={}, panel={})",
         HOST,
         port,
-        state.addin_root.display()
+        state.addin_root.display(),
+        panel_url
     );
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+/// Maps a request path to the asset root that serves it.
+///
+/// `/panel` and `/panel/...` are served from the WPS panel build, everything
+/// else from the WPS add-in directory.
+fn asset_root_and_relative<'a>(
+    url_path: &'a str,
+    addin_root: &'a FsPath,
+    panel_root: &'a FsPath,
+) -> (&'a FsPath, &'a str) {
+    match url_path.strip_prefix(PANEL_URL_PREFIX) {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => (panel_root, rest),
+        _ => (addin_root, url_path),
+    }
 }
 
 fn safe_path_from_url(addin_root: &FsPath, url_path: &str) -> Option<PathBuf> {
@@ -155,10 +186,6 @@ async fn handle_service_action(
     method: Method,
     Path(action): Path<String>,
 ) -> Response {
-    if method != Method::POST {
-        return json_error(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
-    }
-
     if action == "ping" {
         return service_response(
             StatusCode::OK,
@@ -170,6 +197,23 @@ async fn handle_service_action(
                 error: None,
             },
         );
+    }
+
+    if action == "panel-url" {
+        return service_response(
+            StatusCode::OK,
+            ServiceActionResponse {
+                ok: true,
+                action,
+                log_dir: state.logs_dir.to_string_lossy().to_string(),
+                output: state.panel_url.clone(),
+                error: None,
+            },
+        );
+    }
+
+    if method != Method::POST {
+        return json_error(StatusCode::METHOD_NOT_ALLOWED, "Method Not Allowed");
     }
 
     if !matches!(action.as_str(), "start" | "stop" | "check") {
@@ -235,7 +279,8 @@ async fn handle_service_action(
 
 async fn handle_static(State(state): State<AddonHostState>, uri: Uri) -> Response {
     let path = uri.path();
-    let Some(file_path) = resolve_file_path(&state.addin_root, path) else {
+    let (root, relative) = asset_root_and_relative(path, &state.addin_root, &state.panel_root);
+    let Some(file_path) = resolve_file_path(root, relative) else {
         return (StatusCode::NOT_FOUND, "Not Found").into_response();
     };
 
@@ -286,5 +331,36 @@ mod tests {
         );
         assert_eq!(mime_type_for(FsPath::new("main.js")), "application/javascript; charset=utf-8");
         assert_eq!(mime_type_for(FsPath::new("logo.svg")), "image/svg+xml");
+    }
+
+    #[test]
+    fn panel_prefix_routes_to_panel_root() {
+        let addin = FsPath::new("E:/tmp/addin");
+        let panel = FsPath::new("E:/tmp/panel");
+
+        assert_eq!(
+            asset_root_and_relative("/panel/index.html", addin, panel),
+            (panel, "/index.html")
+        );
+        assert_eq!(
+            asset_root_and_relative("/panel", addin, panel),
+            (panel, "")
+        );
+        assert_eq!(
+            asset_root_and_relative("/panel/assets/index-abc.js", addin, panel),
+            (panel, "/assets/index-abc.js")
+        );
+        assert_eq!(
+            asset_root_and_relative("/js/ribbon.js", addin, panel),
+            (addin, "/js/ribbon.js")
+        );
+        assert_eq!(
+            asset_root_and_relative("/", addin, panel),
+            (addin, "/")
+        );
+        assert_eq!(
+            asset_root_and_relative("/panelfoo", addin, panel),
+            (addin, "/panelfoo")
+        );
     }
 }

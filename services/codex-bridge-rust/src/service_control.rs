@@ -18,6 +18,7 @@ use tokio::{
 
 const ADDON_HOST_PORT: u16 = 3889;
 const BRIDGE_PORT: u16 = 32123;
+/// Legacy vite dev-server port; only killed by `stop` to clean up older installs.
 const PANEL_PORT: u16 = 5173;
 const LEGACY_PANEL_PORT: u16 = 5174;
 const LOOPBACK_HOST: &str = "127.0.0.1";
@@ -50,6 +51,7 @@ struct ServiceCheck {
     body: &'static str,
     expected: &'static str,
     timeout_seconds: u64,
+    hint: &'static str,
 }
 
 #[derive(Debug)]
@@ -146,7 +148,6 @@ pub async fn start_services(
 
     let addon_host = addon_host_check();
     let bridge = bridge_check();
-    let panel = panel_check();
 
     if include_addon_host {
         if test_port(addon_host.port).await && !test_http_content(&addon_host).await {
@@ -176,14 +177,12 @@ pub async fn start_services(
         }
     }
 
-    for service in [bridge, panel] {
-        if test_port(service.port).await && !test_http_content(&service).await {
-            if let Err(error) = clear_stale_project_process(context, &mut logger, service.port, service.name).await {
-                return Err(ServiceControlFailure {
-                    output: logger.output(),
-                    message: error.to_string(),
-                });
-            }
+    if test_port(bridge.port).await && !test_http_content(&bridge).await {
+        if let Err(error) = clear_stale_project_process(context, &mut logger, bridge.port, bridge.name).await {
+            return Err(ServiceControlFailure {
+                output: logger.output(),
+                message: error.to_string(),
+            });
         }
     }
 
@@ -201,19 +200,9 @@ pub async fn start_services(
         });
     }
 
-    if !test_http_content(&panel).await {
-        if let Err(error) = start_npm_script(context, &mut logger, "panel:dev").await {
-            return Err(ServiceControlFailure {
-                output: logger.output(),
-                message: error.to_string(),
-            });
-        }
-    } else if let Err(error) = logger.log(format!("{} is already healthy on port {}", panel.name, panel.port)) {
-        return Err(ServiceControlFailure {
-            output: logger.output(),
-            message: error.to_string(),
-        });
-    }
+    // The WPS panel is served by the add-in host as a static build, so it has no
+    // process of its own to start here. `panel_check` only verifies the build is
+    // present and reachable.
 
     let mut failed = Vec::new();
     for check in service_checks() {
@@ -227,7 +216,7 @@ pub async fn start_services(
             continue;
         }
 
-        let failure_text = match find_port_owners(check.port).await {
+        let mut failure_text = match find_port_owners(check.port).await {
             Ok(owners) if !owners.is_empty() => {
                 let details = owners
                     .into_iter()
@@ -242,6 +231,9 @@ pub async fn start_services(
             }
             _ => format!("{} ({}, no listener)", check.name, check.port),
         };
+        if !check.hint.is_empty() {
+            failure_text.push_str(&format!(" | {}", check.hint));
+        }
         if let Err(error) = logger.log(format!("FAILED: {} is not healthy at {}", check.name, check.url)) {
             return Err(ServiceControlFailure {
                 output: logger.output(),
@@ -322,10 +314,11 @@ pub async fn check_services(
             continue;
         }
 
-        failed.push(format!(
-            "{} is not reachable at {}",
-            check.name, check.url
-        ));
+        let mut item = format!("{} is not reachable at {}", check.name, check.url);
+        if !check.hint.is_empty() {
+            item.push_str(&format!(" | {}", check.hint));
+        }
+        failed.push(item);
     }
 
     if failed.is_empty() {
@@ -382,6 +375,7 @@ fn addon_host_check() -> ServiceCheck {
         body: "{}",
         expected: "\"ok\":true",
         timeout_seconds: 60,
+        hint: "",
     }
 }
 
@@ -394,18 +388,20 @@ fn bridge_check() -> ServiceCheck {
         body: "",
         expected: "\"service\":\"codex-bridge\"",
         timeout_seconds: 60,
+        hint: "",
     }
 }
 
 fn panel_check() -> ServiceCheck {
     ServiceCheck {
         name: "WPS panel",
-        port: PANEL_PORT,
-        url: "http://127.0.0.1:5173/index.html",
+        port: ADDON_HOST_PORT,
+        url: "http://127.0.0.1:3889/panel/index.html",
         method: HttpMethod::Get,
         body: "",
         expected: "Codex for WPS Word",
         timeout_seconds: 20,
+        hint: "面板静态产物由加载项宿主提供，缺失时请运行 npm run panel:build",
     }
 }
 

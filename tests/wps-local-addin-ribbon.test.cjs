@@ -258,7 +258,7 @@ test("passes the panel target to a self-navigating lightweight pane", () => {
   assert.equal(
     createdUrl,
     "http://127.0.0.1:3889/taskpane-loader.html?target=" +
-      encodeURIComponent("http://127.0.0.1:5173/index.html")
+      encodeURIComponent("http://127.0.0.1:3889/panel/index.html")
   );
-  assert.equal(storage.getItem("codex_taskpane_url"), "http://127.0.0.1:5173/index.html");
+  assert.equal(storage.getItem("codex_taskpane_url"), "http://127.0.0.1:3889/panel/index.html");
 });

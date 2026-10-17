@@ -167,10 +167,14 @@ if (Test-Path -LiteralPath $registerScript) {
 $serviceChecks = @(
   @{ Name = "WPS add-in host"; Port = 3889; Url = "http://127.0.0.1:3889/__codex/service/ping"; Method = "POST"; Body = "{}"; Expected = '"ok":true'; Starter = "addin"; TimeoutSeconds = 60 },
   @{ Name = "codex bridge"; Port = 32123; Url = "http://127.0.0.1:32123/health"; Expected = '"service":"codex-bridge"'; Starter = "bridge"; TimeoutSeconds = 60 },
-  @{ Name = "WPS panel"; Port = 5173; Url = "http://127.0.0.1:5173/index.html"; Expected = "Codex for WPS Word"; Starter = "panel"; TimeoutSeconds = 20 }
+  @{ Name = "WPS panel"; Port = 3889; Url = "http://127.0.0.1:3889/panel/index.html"; Expected = "Codex for WPS Word"; Starter = "static"; TimeoutSeconds = 20 }
 )
 
 foreach ($service in $serviceChecks) {
+  if ($service.Starter -eq "static") {
+    # Served by the add-in host; killing the port owner would take the host down.
+    continue
+  }
   $method = if ($service.Method) { [string]$service.Method } else { "GET" }
   $body = if ($service.Body) { [string]$service.Body } else { "" }
   if ((Test-Port $service.Port) -and -not (Test-HttpContent $service.Url $service.Expected $method $body)) {
@@ -190,10 +194,10 @@ if (-not (Test-HttpContent "http://127.0.0.1:32123/health" '"service":"codex-bri
   Write-Log "codex bridge is already healthy on port 32123"
 }
 
-if (-not (Test-HttpContent "http://127.0.0.1:5173/index.html" "Codex for WPS Word")) {
-  Start-NpmScript "panel:dev"
+if (-not (Test-HttpContent "http://127.0.0.1:3889/panel/index.html" "Codex for WPS Word")) {
+  Write-Log "WPS panel is not served yet; run 'npm run panel:build' if the build is missing"
 } else {
-  Write-Log "WPS panel is already healthy on port 5173"
+  Write-Log "WPS panel is already healthy on port 3889"
 }
 
 $failed = @()

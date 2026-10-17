@@ -8,6 +8,7 @@
     "bridge:dev": "node scripts/run-rust-tool.mjs",
     "bridge:dev:legacy": "tsx services/codex-bridge/src/server.ts",
     "panel:dev": "vite apps/wps-panel --host 127.0.0.1 --port 5173 --strictPort",
+    "panel:build": "vite build apps/wps-panel --base=/panel/ --outDir dist --logLevel warn",
     "addin:host": "node scripts/run-rust-tool.mjs addon-host",
     "addin:host:legacy": "node scripts/wps-addon-host.mjs",
     "services:start": "node scripts/run-rust-tool.mjs services start",
