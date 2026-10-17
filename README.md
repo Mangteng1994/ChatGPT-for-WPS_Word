@@ -13,7 +13,7 @@
 ```text
 apps/wps-panel/            # WPS 插件前端
 apps/wps-local-addin/      # 本地 WPS JS 加载项包装层（ribbon + taskpane）
-../codex-for-wps-word-rust/ # Rust bridge（默认 bridge:dev，负责调用 codex CLI）
+services/codex-bridge-rust/ # Rust bridge（默认 bridge:dev，负责调用 codex CLI）
 services/codex-bridge/     # 旧版 Node bridge（legacy / 回退对照）
 shared/                    # 前后端共享类型
 docs/                      # 设计文档
@@ -65,7 +65,7 @@ docs/                      # 设计文档
    - `cd apps/wps-local-addin && npm install`
 2. 配置 bridge（两种方式任选其一）：
    - 环境变量：`CODEX_WORKING_DIR`（必填）、`CODEX_CLI_PATH`（可选）
-   - 或复制 `../codex-for-wps-word-rust/config.example.json` 为 `../codex-for-wps-word-rust/config.local.json` 并填写
+   - 或复制 `services/codex-bridge-rust/config.example.json` 为 `services/codex-bridge-rust/config.local.json` 并填写
 3. 启动 bridge（根目录）：
    - `npm run bridge:dev`
    - 这是 Rust 版桥接服务；如果你想对照旧实现，可用 `npm run bridge:dev:legacy`

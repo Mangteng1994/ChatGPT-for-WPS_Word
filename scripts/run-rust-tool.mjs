@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const rustProjectRoot = path.resolve(projectRoot, "..", "codex-for-wps-word-rust");
+const rustProjectRoot = path.join(projectRoot, "services", "codex-bridge-rust");
 const manifestPath = path.join(rustProjectRoot, "Cargo.toml");
 const artifactRecord = path.join(projectRoot, "logs", "rust-tool-artifact.json");
 const binaryName = "codex-for-wps-word-rust";

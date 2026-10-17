@@ -1,6 +1,7 @@
 node_modules/
 dist/
 build/
+target/
 .env
 .env.local
 *.log
@@ -8,4 +9,5 @@ logs/
 .DS_Store
 Thumbs.db
 services/codex-bridge/config.local.json
+services/codex-bridge-rust/config.local.json
 apps/wps-local-addin/.debugTemp/

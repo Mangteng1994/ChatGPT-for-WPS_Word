@@ -45,8 +45,8 @@
 目标：对话不再等待完整返回，用户可以中断长任务。
 
 已完成：
-- `../codex-for-wps-word-rust/src/codex_runner.rs` 新增 `run_codex_with_sink(...)`。
-- `../codex-for-wps-word-rust/src/server.rs` 新增 `POST /run/stream` 和 `POST /run/cancel`。
+- `services/codex-bridge-rust/src/codex_runner.rs` 新增 `run_codex_with_sink(...)`。
+- `services/codex-bridge-rust/src/server.rs` 新增 `POST /run/stream` 和 `POST /run/cancel`。
 - `apps/wps-panel/src/api-client.ts` 新增 `runByBridgeStream(...)` 和 `cancelBridgeRun(...)`。
 - `apps/wps-panel/src/main.ts` 支持流式渲染和停止按钮。
 
@@ -177,7 +177,7 @@
 - `apps/wps-panel/src/document-actions.ts`：写回、插入、Diff 审核入口。
 - `apps/wps-panel/src/diff.ts`：纯文本差异计算。
 - `apps/wps-panel/src/prompt-presets.ts`：预设动作和 prompt 构造。
-- `../codex-for-wps-word-rust/src/server.rs` 与 `../codex-for-wps-word-rust/src/config.rs`：本地环境与服务状态检查。
+- `services/codex-bridge-rust/src/server.rs` 与 `services/codex-bridge-rust/src/config.rs`：本地环境与服务状态检查。
 
 ## 风险和原则
 
