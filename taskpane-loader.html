@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Codex for WPS Word</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px 18px;
+        color: #5b6472;
+        background: #f7f8fa;
+        font: 14px/1.6 "Segoe UI", "Microsoft YaHei", sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="status">正在启动 Codex 面板…</div>
+    <script>
+      (function () {
+        var fallbackTarget = "http://127.0.0.1:3889/panel/index.html";
+        var match = /(?:^|[?&])target=([^&]+)/.exec(window.location.search || "");
+        var target = fallbackTarget;
+        if (match && match[1]) {
+          try {
+            var decoded = decodeURIComponent(match[1]);
+            if (/^https?:\/\/[^\s]+$/i.test(decoded)) target = decoded;
+          } catch (_error) {
+          }
+        }
+
+        var status = document.getElementById("status");
+        var xhr = new XMLHttpRequest();
+        xhr.open("POST", "/__codex/service/start", true);
+        xhr.timeout = 65000;
+        xhr.setRequestHeader("Content-Type", "application/json");
+        xhr.onreadystatechange = function () {
+          if (xhr.readyState !== 4) return;
+          if (xhr.status >= 200 && xhr.status < 300) {
+            window.location.replace(target);
+            return;
+          }
+          status.textContent = "本地服务启动失败（HTTP " + xhr.status + "），请关闭面板后重试。";
+        };
+        xhr.onerror = function () {
+          status.textContent = "无法连接本地服务，请关闭面板后重试。";
+        };
+        xhr.ontimeout = function () {
+          status.textContent = "本地服务启动超时，请关闭面板后重试。";
+        };
+        xhr.send("{}");
+      })();
+    </script>
+  </body>
+</html>

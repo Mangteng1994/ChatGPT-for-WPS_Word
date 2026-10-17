@@ -1,0 +1,42 @@
+<customUI xmlns="http://schemas.microsoft.com/office/2006/01/customui" onLoad="OnAddinLoad">
+  <ribbon startFromScratch="false">
+    <tabs>
+      <tab id="codexTab" label="Codex">
+        <group id="codexGroup" label="Codex for Word">
+          <button
+            id="btnStartServices"
+            label="启动本地服务"
+            onAction="OnAction"
+            getEnabled="OnGetEnabled"
+            visible="true"
+            size="large"
+          />
+          <button
+            id="btnStopServices"
+            label="关闭本地服务"
+            onAction="OnAction"
+            getEnabled="OnGetEnabled"
+            visible="true"
+            size="large"
+          />
+          <button
+            id="btnTogglePanel"
+            label="打开 Codex 面板"
+            onAction="OnAction"
+            getEnabled="OnGetEnabled"
+            visible="true"
+            size="large"
+          />
+          <button
+            id="btnSetPanelUrl"
+            label="设置面板地址"
+            onAction="OnAction"
+            getEnabled="OnGetEnabled"
+            visible="true"
+            size="large"
+          />
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>

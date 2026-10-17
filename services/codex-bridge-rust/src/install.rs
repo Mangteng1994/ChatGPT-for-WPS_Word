@@ -55,6 +55,14 @@ pub async fn install() -> Result<()> {
     println!("已设置开机自启任务: {AUTOSTART_TASK_NAME}");
 
     let context = service_control::detect_context()?;
+
+    // 先收掉可能在运行的旧副本（开发目录或上一个安装目录里的宿主仍占着 3889，
+    // 直接复用会让新装的加载项与面板资源永远不生效）。
+    if let Err(error) = service_control::stop_all_services(&context).await {
+        eprintln!("停止已有本地服务时遇到问题: {}", error.message);
+    }
+    println!("已重置本地服务运行态");
+
     if let Err(error) = service_control::start_services(&context, true).await {
         if !error.output.trim().is_empty() {
             eprintln!("{}", error.output);
