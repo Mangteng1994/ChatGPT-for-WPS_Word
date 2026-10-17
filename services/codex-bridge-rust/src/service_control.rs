@@ -6,7 +6,6 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    process::Stdio,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, RefreshKind, System};
@@ -291,6 +290,24 @@ pub async fn start_services(
 pub async fn stop_services(
     context: &ServiceControlContext,
 ) -> std::result::Result<String, ServiceControlFailure> {
+    stop_ports(context, &[BRIDGE_PORT, PANEL_PORT, LEGACY_PANEL_PORT]).await
+}
+
+/// 连同加载项宿主一起停止，供卸载使用。
+pub async fn stop_all_services(
+    context: &ServiceControlContext,
+) -> std::result::Result<String, ServiceControlFailure> {
+    stop_ports(
+        context,
+        &[BRIDGE_PORT, ADDON_HOST_PORT, PANEL_PORT, LEGACY_PANEL_PORT],
+    )
+    .await
+}
+
+async fn stop_ports(
+    context: &ServiceControlContext,
+    ports: &[u16],
+) -> std::result::Result<String, ServiceControlFailure> {
     let mut failures = Vec::new();
 
     // 先打停止标记，避免宿主看护在关闭过程中把 bridge 重新拉起。
@@ -298,8 +315,8 @@ pub async fn stop_services(
         failures.push(error.to_string());
     }
 
-    for port in [BRIDGE_PORT, PANEL_PORT, LEGACY_PANEL_PORT] {
-        match find_port_owners(port).await {
+    for port in ports {
+        match find_port_owners(*port).await {
             Ok(owners) => {
                 for pid in owners {
                     if let Err(error) = kill_process_tree(pid).await {
@@ -311,10 +328,12 @@ pub async fn stop_services(
         }
     }
 
-    let output = format!(
-        "Stopped local Codex bridge services on ports: {}, {}, {} (auto-restart paused)",
-        BRIDGE_PORT, PANEL_PORT, LEGACY_PANEL_PORT
-    );
+    let port_list = ports
+        .iter()
+        .map(|port| port.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let output = format!("Stopped local Codex services on ports: {port_list} (auto-restart paused)");
     if failures.is_empty() {
         Ok(output)
     } else {
@@ -504,7 +523,10 @@ pub async fn run_bridge_watchdog() {
         }
 
         match start_self_service_detached(&context, "bridge").await {
-            Ok(()) => watchdog_log(&context.logs_dir, "bridge 不可达，已自动重新拉起"),
+            Ok(pid) => watchdog_log(
+                &context.logs_dir,
+                &format!("bridge 不可达，已自动重新拉起（pid {pid}）"),
+            ),
             Err(error) => watchdog_log(&context.logs_dir, &format!("自动拉起 bridge 失败: {error}")),
         }
     }
@@ -539,21 +561,21 @@ impl ServiceLogger {
 
 /// 用当前可执行文件本身拉起子服务（`addon-host` / `bridge`）。
 ///
-/// 这是打包后的关键路径：运行期不再依赖 Node 与 npm 脚本。
+/// 这是打包后的关键路径：运行期不再依赖 Node、npm 脚本或 cmd 启动脚本，
+/// 也不会把调用方的句柄带进守护进程。
 async fn start_self_service(
     context: &ServiceControlContext,
     logger: &mut ServiceLogger,
     mode_arg: &str,
 ) -> Result<()> {
-    let (exe, args) = self_service_command(mode_arg)?;
-    logger.log(format!("Starting {mode_arg}: {} {mode_arg}", exe.display()))?;
-    spawn_detached_process(&context.logs_dir, mode_arg, &exe, &args, &context.runtime_root).await
+    let pid = start_self_service_detached(context, mode_arg).await?;
+    logger.log(format!("Started {mode_arg} (pid {pid})"))
 }
 
-/// 不带 logger 的自拉起，供看护在后台使用。
-async fn start_self_service_detached(context: &ServiceControlContext, mode_arg: &str) -> Result<()> {
+/// 不带 logger 的自拉起，供看护在后台使用；返回子进程 PID。
+async fn start_self_service_detached(context: &ServiceControlContext, mode_arg: &str) -> Result<u32> {
     let (exe, args) = self_service_command(mode_arg)?;
-    spawn_detached_process(&context.logs_dir, mode_arg, &exe, &args, &context.runtime_root).await
+    spawn_detached_process(&context.logs_dir, mode_arg, &exe, &args, &context.runtime_root)
 }
 
 fn self_service_command(mode_arg: &str) -> Result<(PathBuf, Vec<OsString>)> {
@@ -561,90 +583,27 @@ fn self_service_command(mode_arg: &str) -> Result<(PathBuf, Vec<OsString>)> {
     Ok((exe, vec![OsString::from(mode_arg)]))
 }
 
-async fn spawn_detached_process(
+fn spawn_detached_process(
     logs_dir: &Path,
     name: &str,
     file_path: &Path,
     args: &[OsString],
     working_dir: &Path,
-) -> Result<()> {
+) -> Result<u32> {
     let stdout_path = logs_dir.join(format!("{name}.out.log"));
     let stderr_path = logs_dir.join(format!("{name}.err.log"));
-    OpenOptions::new()
+    let stdout = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&stdout_path)
         .with_context(|| format!("打开日志文件失败: {}", stdout_path.display()))?;
-    OpenOptions::new()
+    let stderr = OpenOptions::new()
         .create(true)
         .append(true)
         .open(&stderr_path)
         .with_context(|| format!("打开日志文件失败: {}", stderr_path.display()))?;
 
-    let launcher_path = logs_dir.join(format!("{name}.cmd"));
-    let launcher_content = build_launcher_script(working_dir, file_path, args, &stdout_path, &stderr_path);
-    fs::write(&launcher_path, launcher_content)
-        .with_context(|| format!("写入启动脚本失败: {}", launcher_path.display()))?;
-
-    let mut command = Command::new("cmd.exe");
-    command
-        .args([
-            OsString::from("/d"),
-            OsString::from("/c"),
-            OsString::from("start"),
-            OsString::from(""),
-            OsString::from("/min"),
-            OsString::from("cmd.exe"),
-            OsString::from("/d"),
-            OsString::from("/c"),
-            OsString::from(launcher_path.as_os_str()),
-        ])
-        .current_dir(working_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    #[cfg(windows)]
-    {
-        command.creation_flags(CREATE_NO_WINDOW);
-    }
-    command
-        .spawn()
-        .with_context(|| format!("启动进程失败: {}", file_path.display()))?;
-    Ok(())
-}
-
-fn build_launcher_script(
-    working_dir: &Path,
-    file_path: &Path,
-    args: &[OsString],
-    stdout_path: &Path,
-    stderr_path: &Path,
-) -> String {
-    let mut command_line = quote_cmd_arg(file_path);
-    for arg in args {
-        command_line.push(' ');
-        command_line.push_str(&quote_cmd_text(&arg.to_string_lossy()));
-    }
-
-    [
-        "@echo off".to_string(),
-        format!("cd /d {}", quote_cmd_arg(working_dir)),
-        format!(
-            "{} >> {} 2>> {}",
-            command_line,
-            quote_cmd_arg(stdout_path),
-            quote_cmd_arg(stderr_path)
-        ),
-    ]
-    .join("\r\n")
-}
-
-fn quote_cmd_arg(path: &Path) -> String {
-    quote_cmd_text(&path.to_string_lossy())
-}
-
-fn quote_cmd_text(text: &str) -> String {
-    format!("\"{}\"", text.replace('"', "\"\""))
+    crate::detach::spawn_detached(file_path, args, working_dir, &stdout, &stderr)
 }
 
 async fn clear_stale_project_process(
@@ -986,21 +945,6 @@ mod tests {
         let layout = crate::layout::detect_layout();
         assert_eq!(context.logs_dir, layout.logs_dir);
         assert_eq!(context.runtime_root, layout.project_root.expect("仓库模式应有根目录"));
-    }
-
-    #[test]
-    fn launcher_script_starts_current_exe_without_npm() {
-        let script = build_launcher_script(
-            Path::new("E:/repo"),
-            Path::new("E:/repo/service.exe"),
-            &[OsString::from("bridge")],
-            Path::new("E:/repo/logs/bridge.out.log"),
-            Path::new("E:/repo/logs/bridge.err.log"),
-        );
-
-        assert!(script.contains("cd /d \"E:/repo\""));
-        assert!(script.contains("\"E:/repo/service.exe\" \"bridge\""));
-        assert!(!script.to_ascii_lowercase().contains("npm"));
     }
 
     #[test]

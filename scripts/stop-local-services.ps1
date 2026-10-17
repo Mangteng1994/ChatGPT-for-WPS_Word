@@ -1,17 +1,7 @@
 $ErrorActionPreference = "Stop"
 
-# Keep 3889 (wps-addon-host) alive so ribbon service actions can return a response.
-# Stop only bridge/panel related ports here, matching README behavior.
-$ports = @(32123, 5173, 5174)
-$connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-  Where-Object { $ports -contains $_.LocalPort }
+# Stops the bridge (and legacy panel ports) but keeps the 3889 add-in host alive,
+# so the WPS ribbon "start local services" action can still answer.
+. (Join-Path $PSScriptRoot "wps-codex-exe.ps1")
 
-$processIds = $connections |
-  Select-Object -ExpandProperty OwningProcess -Unique |
-  Where-Object { $_ -and $_ -ne $PID }
-
-foreach ($processId in $processIds) {
-  Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
-}
-
-Write-Host "Stopped local Codex bridge/panel services on ports: $($ports -join ', ')"
+Invoke-WpsCodex -Arguments @("services", "stop")

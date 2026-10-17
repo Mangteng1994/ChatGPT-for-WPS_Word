@@ -1,4 +1,4 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-call npm run stop:wps-codex
+powershell.exe -ExecutionPolicy Bypass -File "%~dp0scripts\stop-local-services.ps1"

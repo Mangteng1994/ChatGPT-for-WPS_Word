@@ -13,7 +13,7 @@
 - 已有 WPS 本地加载项、面板页、Rust bridge（兼容 `codex-bridge` API）和一键启动脚本。
 - 已支持会话、选区上下文、模型选择、思考长度、图片上传、插图占位、写回选区、插入回复。
 - 已完成 `P1` 的核心：流式输出和停止生成。
-- 已增强本地服务启动：WPS ribbon 按钮会调用启动脚本，脚本统一通过 npm 脚本入口拉起 Rust 宿主/bridge/panel、写日志并确认端口。
+- 已增强本地服务启动：WPS ribbon 按钮与 PowerShell 脚本都统一走 exe 子命令（`services start` / `install`），由可执行文件自身拉起 Rust 宿主与 bridge，写日志并确认端口。
 
 ## 开发顺序
 
@@ -28,12 +28,13 @@
 - 解析 `npm.cmd` 的完整路径，降低 WPS 进程 PATH 不完整导致的失败概率。
 - `addin:host` 保持为加载项宿主统一入口，当前默认已切到 Rust 宿主，用户操作方式保持不变。
 - Rust 宿主已内建 `start/stop/check` 运行时控制逻辑，WPS 按钮不再回调旧 PowerShell 服务控制脚本。
-- `npm run services:check` 与 `npm run stop:wps-codex` 已可直接走 Rust 服务控制；`start:wps-codex` 继续保留稳定的外层启动 wrapper。
+- `npm run services:check` 与 `npm run stop:wps-codex` 已可直接走 Rust 服务控制；`scripts/` 下所有 PowerShell 脚本已改为 exe 子命令的薄包装（共用 `scripts/wps-codex-exe.ps1` 定位 exe，并补齐 gnullvm 构建所需的 `libunwind.dll` 搜索路径）。
+- 子服务脱离调用方控制台启动（`DETACHED_PROCESS` + 句柄继承白名单），调用方把输出接进管道或重定向时不会被长期存活的守护进程拖住。
 
 后续可补：
 - 面板内增加 `/health` 状态展示。
 - WPS ribbon 增加“查看启动日志”按钮。
-- `stop-local-services.ps1` 只停止本项目启动的服务，减少误杀同端口开发服务的风险。
+- `services stop` 目前按端口停进程，可进一步校验进程映像路径，只停止本项目启动的服务，减少误杀同端口开发服务的风险。
 
 验收标准：
 1. 在 WPS 中点击“启动本地服务”后，`3889/32123` 均可监听，且 `3889/panel/index.html` 返回面板页面。
@@ -175,12 +176,13 @@
 已完成：
 - 面板静态化：`npm run panel:build` 产出 `apps/wps-panel/dist`，由加载项宿主在 `3889/panel/` 提供，运行时不再依赖 vite dev server。
 - 运行期布局解析（`services/codex-bridge-rust/src/layout.rs`）：区分 `repo` / `installed` 两种模式，配置与日志不再依赖编译期路径。
-- 服务自举：`services start` 用可执行文件自身拉起 `addon-host` / `bridge`，运行期不再依赖 npm 脚本。
+- 服务自举：`services start` 用可执行文件自身拉起 `addon-host` / `bridge`，运行期不再依赖 npm 脚本与 cmd 启动脚本。
 - 宿主内建 bridge 看护：15 秒探活、掉线自动重启、重启限流，用户主动停止时通过 `logs/bridge-paused.marker` 暂停看护。
+- 加载项注册与开机自启移植进 exe（`src/addon_registry.rs`、`src/install.rs`）：新增 `install` / `uninstall [--keep-files]` / `register` / `unregister` / `doctor`；`installed` 模式卸载会删掉安装目录，`repo` 模式永远保留源码树。
+- PowerShell 脚本改为薄包装：只调用 exe 子命令，逻辑只有 exe 里一份。
 
 待办：
-- 加载项注册与开机自启逻辑移植进 exe，新增 `install` / `uninstall` / `doctor`，PowerShell 脚本改为薄包装。
-- 资源内嵌（`include_dir!`）与 release 打包：`-C target-feature=+crt-static` 产出无外部依赖的单文件。
+- 资源内嵌（`include_dir!`）与 release 打包：新增 `package:exe`（先 `panel:build`，再 `-C target-feature=+crt-static` 出无外部依赖的单文件）。
 
 验收标准：
 1. 在没有 Node / Rust 的机器上，只放一个 exe，双击安装后 WPS 出现 Codex 选项卡且面板可问答。
@@ -207,10 +209,9 @@
 
 ## 最近下一步
 
-推进 `P7 单文件 exe 分发`，服务自举与看护已完成，进入「安装/卸载自举 + 资源内嵌」阶段。
+推进 `P7 单文件 exe 分发`。安装/卸载自举、看护、PS 薄包装已完成，进入「资源内嵌 + release 打包 + 无 Node 验收」阶段。
 
 具体任务：
-1. 把加载项注册（`publish.xml`/`ribbon.xml`）与开机自启逻辑移植进 exe，新增 `install` / `uninstall` / `doctor`。
-2. PowerShell 安装与启动脚本改为薄包装，只调用 exe 子命令，消除重复实现。
-3. 用 `include_dir!` 内嵌面板与加载项资源，release + `+crt-static` 出单文件。
-4. 在无 Node 环境端到端验收（安装 → 选项卡 → 面板 → 问答 → 写回 → 卸载无残留）。
+1. 用 `include_dir!` 内嵌面板与加载项资源（feature `embedded-assets`，默认关闭），使 exe 不再需要同目录资源。
+2. 新增 `npm run package:exe`：先构建面板静态产物，停掉本地服务，再用 `+crt-static` 打 release。
+3. 在无 Node 环境端到端验收（安装 → 选项卡 → 面板 → 问答 → 写回 → 重启后可用 → 卸载无残留）。

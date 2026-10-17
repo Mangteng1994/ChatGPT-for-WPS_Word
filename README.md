@@ -30,6 +30,25 @@ docs/                      # 设计文档
 
 `installed` 是打包发布的目标形态；面板静态资源后续会内嵌进 exe。两种模式都可用环境变量覆盖：`CODEX_BRIDGE_CONFIG_PATH`（配置文件）、`CODEX_CLI_PATH`、`CODEX_WORKING_DIR`。
 
+## 服务程序子命令
+
+`codex-for-wps-word-rust.exe` 本身就是完整入口，注册、守护、安装都在这一个文件里（`repo` 模式下位于 `services/codex-bridge-rust/target/debug/`）：
+
+| 子命令 | 作用 |
+|---|---|
+| `services start` | 拉起 `addon-host`（3889）与 `bridge`（32123），并等待健康检查通过 |
+| `services stop` | 停 bridge 与遗留面板端口（5173/5174），保留 3889；写入暂停标记，看护不再自动拉起 |
+| `services check` | 检查三个服务端点，异常时返回非零退出码 |
+| `install` | 注册 WPS 加载项 + 建立开机自启任务 + 启动本地服务 |
+| `uninstall [--keep-files]` | 停服务、删自启任务、移除加载项注册；`installed` 模式下再删除安装目录 |
+| `register` / `unregister` | 只操作 `publish.xml` 里的加载项注册 |
+| `doctor` | 逐项体检加载项注册、自启任务、服务端点，输出 `OK` / `FAILED` |
+| `addon-host` / `bridge` | 以守护进程方式运行宿主 / 桥接（由 `services start` 拉起，一般不手动调用） |
+
+子服务由 exe 用自身拉起，以 `DETACHED_PROCESS` 脱离调用方控制台，并且只继承三个标准句柄——即使调用方把输出重定向或接进管道，也不会被长期存活的守护进程拖住。日志写入 `<日志目录>/<name>.out.log` 与 `<name>.err.log`。
+
+`scripts/` 下的 PowerShell 脚本都是这些子命令的薄包装（共用 `scripts/wps-codex-exe.ps1` 定位 exe），方便双击或从 PowerShell 调用；逻辑只有 exe 里一份，不再有第二套实现。
+
 ## 下一步开发顺序（建议）
 
 详见 [Development Roadmap](docs/development-roadmap.md)。
@@ -58,6 +77,7 @@ docs/                      # 设计文档
 - 立即拉起本地服务并执行健康检查
 
 若朋友机器上出现“选项卡不见/面板打不开”：
+- `npm run doctor:wps-codex` 先看体检结果（逐项列出加载项注册、自启任务、服务端点的 `OK` / `FAILED`）
 - `npm run repair:wps-codex`
 - 或双击 `repair-wps-codex.cmd`
 
@@ -103,7 +123,7 @@ docs/                      # 设计文档
   - `npm run uninstall:wps-codex`
 - 从 PowerShell 启动完整调试链路：
   - `npm run start:wps-codex`
-  - 该入口当前仍使用外层启动 wrapper；WPS 宿主内的 `start/stop/check` 已切到 Rust 运行时控制
+  - 该入口是 exe 的薄包装：依次执行 `register` 与 `services start`
 - 从资源管理器双击启动：
   - `start-wps-codex.cmd`
 - 从 PowerShell 关闭 bridge 和面板服务：
@@ -116,7 +136,7 @@ docs/                      # 设计文档
 - 从 WPS 的 `Codex` 选项卡启动本地服务：
   - 点击 `启动本地服务`
   - 该按钮现在由 Rust 宿主内建的 `start` 动作处理，会拉起加载项宿主服务（3889）与 Rust bridge（32123）；面板是宿主提供的静态资源，不再是独立进程
-  - 子服务由可执行文件自身拉起（`exe addon-host` / `exe bridge`），运行期不再依赖 npm 脚本
+  - 子服务由可执行文件自身拉起（`exe addon-host` / `exe bridge`），脱离调用方控制台启动，运行期不再依赖 npm 脚本或 cmd 启动脚本
   - 前提是 WPS 加载项自身已经加载成功
 - 从 WPS 的 `Codex` 选项卡关闭本地服务：
   - 点击 `关闭本地服务`

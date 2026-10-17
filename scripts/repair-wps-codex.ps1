@@ -1,20 +1,12 @@
 $ErrorActionPreference = "Stop"
 
-$installScript = Join-Path $PSScriptRoot "install-wps-codex.ps1"
-$stopScript = Join-Path $PSScriptRoot "stop-local-services.ps1"
+. (Join-Path $PSScriptRoot "wps-codex-exe.ps1")
 
-if (-not (Test-Path -LiteralPath $installScript)) {
-  throw "Install script not found: $installScript"
-}
-
-if (-not (Test-Path -LiteralPath $stopScript)) {
-  throw "Stop script not found: $stopScript"
-}
-
+# Repair = stop the running processes, then run the full install again.
 Write-Host "Stopping current local services..."
-& $stopScript
+Invoke-WpsCodex -Arguments @("services", "stop")
 
 Write-Host "Rebuilding local install state..."
-& $installScript
+Invoke-WpsCodex -Arguments @("install")
 
 Write-Host "Repair complete."

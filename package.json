@@ -21,6 +21,7 @@
     "repair:wps-codex": "powershell -ExecutionPolicy Bypass -File scripts/repair-wps-codex.ps1",
     "start:wps-codex": "powershell -ExecutionPolicy Bypass -File scripts/start-wps-codex.ps1",
     "stop:wps-codex": "npm run services:stop",
+    "doctor:wps-codex": "node scripts/run-rust-tool.mjs doctor",
     "uninstall:wps-codex": "powershell -ExecutionPolicy Bypass -File scripts/uninstall-wps-codex.ps1",
     "test:style-nl": "tsx apps/wps-panel/src/style-nl-parser.test.ts",
     "test:style-nl-generic": "tsx apps/wps-panel/src/style-nl-generic.test.ts",
