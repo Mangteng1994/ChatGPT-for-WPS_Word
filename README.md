@@ -28,7 +28,7 @@ docs/                      # 设计文档
 | `repo` | exe 位于源码仓库内 | `services/codex-bridge-rust/config.local.json` | `<仓库根>/logs` | `apps/wps-local-addin`、`apps/wps-panel/dist` |
 | `installed` | exe 被拷贝到仓库外（安装目录） | `<exe 同目录>/config.json` | `<exe 同目录>/logs` | `<exe 同目录>/addin`、`<exe 同目录>/panel` |
 
-`installed` 是打包发布的目标形态；面板静态资源后续会内嵌进 exe。两种模式都可用环境变量覆盖：`CODEX_BRIDGE_CONFIG_PATH`（配置文件）、`CODEX_CLI_PATH`、`CODEX_WORKING_DIR`。
+`installed` 是打包发布的目标形态：用 `npm run package:exe` 构建时，加载项与面板静态资源会通过 `embedded-assets` feature 内嵌进 exe，运行时不再需要同目录的 `addin/` 与 `panel/`（见「单文件分发」）。两种模式都可用环境变量覆盖：`CODEX_BRIDGE_CONFIG_PATH`（配置文件）、`CODEX_CLI_PATH`、`CODEX_WORKING_DIR`。
 
 ## 服务程序子命令
 
@@ -142,6 +142,37 @@ docs/                      # 设计文档
   - 点击 `关闭本地服务`
   - 该按钮现在由 Rust 宿主内建的 `stop` 动作处理，会关闭 bridge，并清理遗留的面板 dev server（5173/5174），但保留 WPS 加载项调试服务
   - 同时写入 `logs/bridge-paused.marker`，宿主看护在标记存在期间不会自动拉起 bridge
+
+## 单文件分发（打包给同事）
+
+打包方需要本机有 Node 与 Rust 工具链；**同事机器不需要** Node、npm 或 Rust。
+
+```text
+npm run package:exe
+```
+
+它依次做四件事：停掉本地服务 → `panel:build` 构建面板 → `cargo build --release --features embedded-assets`（带 `RUSTFLAGS=-C target-feature=+crt-static`）→ 把产物复制成 `dist/codex-for-wps-word.exe`。
+
+产物是**真正的单文件**：加载项与面板资源都已内嵌，只依赖系统 DLL（`+crt-static` 去掉了 `libunwind.dll` 依赖）。
+
+同事的安装步骤：
+
+1. 把 `codex-for-wps-word.exe` 放到任意目录（例如 `%LOCALAPPDATA%\CodexForWpsWord`），双击或执行 `codex-for-wps-word.exe install`。
+2. `install` 会注册 WPS 加载项、建立登录自启任务、拉起本地服务；配置与日志写在 exe 同目录。
+3. 完全退出并重新打开 WPS，在 `Codex` 选项卡点击 `打开 Codex 面板`。
+
+排查与卸载：
+
+- `codex-for-wps-word.exe doctor` 逐项体检（资源来源会显示「内嵌在可执行文件中」）
+- `codex-for-wps-word.exe uninstall` 停服务、删自启任务、移除注册并删除安装目录
+
+仍然无法消除的三条前提：
+
+- 同事需要自己安装 Codex CLI 并完成 `codex login`。
+- exe 未做代码签名，首次运行会触发 SmartScreen 提示（选「更多信息」→「仍要运行」）。
+- 系统需要 Windows 10 及以上（依赖 UCRT）。
+
+开发态与打包态的取舍：默认构建（`embedded-assets` 关闭）始终从 `apps/` 目录读资源，改完面板刷新即可生效；打包时才启用内嵌，所以日常开发不受影响。
 
 ## 服务自愈（宿主看护）
 

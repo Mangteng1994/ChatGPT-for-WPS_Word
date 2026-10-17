@@ -180,9 +180,11 @@
 - 宿主内建 bridge 看护：15 秒探活、掉线自动重启、重启限流，用户主动停止时通过 `logs/bridge-paused.marker` 暂停看护。
 - 加载项注册与开机自启移植进 exe（`src/addon_registry.rs`、`src/install.rs`）：新增 `install` / `uninstall [--keep-files]` / `register` / `unregister` / `doctor`；`installed` 模式卸载会删掉安装目录，`repo` 模式永远保留源码树。
 - PowerShell 脚本改为薄包装：只调用 exe 子命令，逻辑只有 exe 里一份。
+- 资源内嵌（`embedded-assets` feature，默认关闭）：`build.rs` 把加载项（html/xml/js/css/svg/png/ico）与面板 `dist` 编进 exe；宿主静态服务改为「磁盘优先、内嵌兜底」，`doctor` 会显示资源来自目录还是内嵌。
+- 单文件打包：`npm run package:exe` → 停服务 → `panel:build` → `cargo build --release --features embedded-assets`（`-C target-feature=+crt-static`）→ `dist/codex-for-wps-word.exe`（约 3.5 MB，只依赖系统 DLL）。
 
 待办：
-- 资源内嵌（`include_dir!`）与 release 打包：新增 `package:exe`（先 `panel:build`，再 `-C target-feature=+crt-static` 出无外部依赖的单文件）。
+- 在无 Node 环境做完整验收（安装 → 选项卡 → 面板 → 问答 → 写回 → 重启后可用 → 卸载无残留）。
 
 验收标准：
 1. 在没有 Node / Rust 的机器上，只放一个 exe，双击安装后 WPS 出现 Codex 选项卡且面板可问答。
@@ -209,9 +211,7 @@
 
 ## 最近下一步
 
-推进 `P7 单文件 exe 分发`。安装/卸载自举、看护、PS 薄包装已完成，进入「资源内嵌 + release 打包 + 无 Node 验收」阶段。
+推进 `P7 单文件 exe 分发`。安装/卸载自举、看护、PS 薄包装、资源内嵌与 `npm run package:exe` 均已完成，单文件形态的安装 → 健康检查 → 内嵌资源服务 → 卸载无残留已在开发机验证通过。
 
-具体任务：
-1. 用 `include_dir!` 内嵌面板与加载项资源（feature `embedded-assets`，默认关闭），使 exe 不再需要同目录资源。
-2. 新增 `npm run package:exe`：先构建面板静态产物，停掉本地服务，再用 `+crt-static` 打 release。
-3. 在无 Node 环境端到端验收（安装 → 选项卡 → 面板 → 问答 → 写回 → 重启后可用 → 卸载无残留）。
+剩余任务：
+1. 在无 Node（并可无 Rust）的机器上端到端验收：安装 → 选项卡 → 面板 → 问答 → 写回 → 重启后可用 → 卸载无残留。

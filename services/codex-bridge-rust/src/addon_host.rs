@@ -1,3 +1,4 @@
+use crate::embedded::{self, AssetKind};
 use crate::layout;
 use crate::service_control::{
     check_services, detect_context, run_bridge_watchdog, start_services, stop_services,
@@ -49,7 +50,7 @@ pub async fn run() -> Result<()> {
         .unwrap_or(DEFAULT_PORT);
     let layout = layout::detect_layout();
     let addin_root = layout.addin_root.clone();
-    if !addin_root.is_dir() {
+    if !addin_root.is_dir() && !embedded::has_assets(AssetKind::Addin) {
         bail!(
             "WPS add-in 资源目录不存在：{}（{}）",
             addin_root.display(),
@@ -61,7 +62,7 @@ pub async fn run() -> Result<()> {
     let logs_dir = layout.logs_dir.clone();
     fs::create_dir_all(&logs_dir)?;
 
-    if !panel_root.is_dir() {
+    if !panel_root.is_dir() && !embedded::has_assets(AssetKind::Panel) {
         eprintln!(
             "[wps-addon-host] WPS panel build not found at {} - run `npm run panel:build` to serve it at {}",
             panel_root.display(),
@@ -98,46 +99,72 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-/// Maps a request path to the asset root that serves it.
+/// Maps a request path to the asset source it belongs to.
 ///
 /// `/panel` and `/panel/...` are served from the WPS panel build, everything
 /// else from the WPS add-in directory.
-fn asset_root_and_relative<'a>(
+fn asset_target<'a>(
     url_path: &'a str,
     addin_root: &'a FsPath,
     panel_root: &'a FsPath,
-) -> (&'a FsPath, &'a str) {
+) -> (AssetKind, &'a FsPath, &'a str) {
     match url_path.strip_prefix(PANEL_URL_PREFIX) {
-        Some(rest) if rest.is_empty() || rest.starts_with('/') => (panel_root, rest),
-        _ => (addin_root, url_path),
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => {
+            (AssetKind::Panel, panel_root, rest)
+        }
+        _ => (AssetKind::Addin, addin_root, url_path),
     }
 }
 
-fn safe_path_from_url(addin_root: &FsPath, url_path: &str) -> Option<PathBuf> {
+/// 把 URL 路径整理成安全的相对路径：拦截 `..`、绝对路径与盘符。
+fn normalize_relative(url_path: &str) -> Option<String> {
     let trimmed = url_path.trim_start_matches('/');
-    let relative = if trimmed.is_empty() {
-        FsPath::new("index.html")
-    } else {
-        FsPath::new(trimmed)
-    };
-    let mut resolved = addin_root.to_path_buf();
-    for component in relative.components() {
+    let mut parts: Vec<&str> = Vec::new();
+    for component in FsPath::new(trimmed).components() {
         match component {
-            Component::Normal(part) => resolved.push(part),
+            Component::Normal(part) => parts.push(part.to_str()?),
             Component::CurDir => {}
             Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
         }
     }
-    Some(resolved)
+    if parts.is_empty() {
+        // 空路径与 `/panel/` 都落到该来源的首页。
+        return Some("index.html".to_string());
+    }
+    Some(parts.join("/"))
 }
 
-fn resolve_file_path(addin_root: &FsPath, url_path: &str) -> Option<PathBuf> {
-    let primary = safe_path_from_url(addin_root, url_path)?;
+/// 磁盘上的资源文件；找不到原文件时回退到该来源的 `index.html`。
+fn disk_asset(root: &FsPath, relative: &str) -> Option<PathBuf> {
+    let primary = root.join(relative);
     if primary.is_file() {
         return Some(primary);
     }
-    let fallback = addin_root.join("index.html");
+    let fallback = root.join("index.html");
     fallback.is_file().then_some(fallback)
+}
+
+/// 读取静态资源：磁盘优先（开发时改完刷新即可生效），内嵌兜底（单文件分发）。
+fn load_asset(kind: AssetKind, root: &FsPath, relative: &str) -> Option<(Vec<u8>, &'static str)> {
+    if let Some(path) = disk_asset(root, relative) {
+        match fs::read(&path) {
+            Ok(data) => return Some((data, mime_type_for(&path))),
+            Err(error) => eprintln!(
+                "[wps-addon-host] 读取静态资源失败 {}: {error}",
+                path.display()
+            ),
+        }
+    }
+
+    if let Some(bytes) = embedded::lookup(kind, relative) {
+        return Some((bytes.to_vec(), mime_type_for(FsPath::new(relative))));
+    }
+    if relative != "index.html" {
+        if let Some(bytes) = embedded::lookup(kind, "index.html") {
+            return Some((bytes.to_vec(), "text/html; charset=utf-8"));
+        }
+    }
+    None
 }
 
 fn mime_type_for(path: &FsPath) -> &'static str {
@@ -286,30 +313,18 @@ async fn handle_service_action(
 }
 
 async fn handle_static(State(state): State<AddonHostState>, uri: Uri) -> Response {
-    let path = uri.path();
-    let (root, relative) = asset_root_and_relative(path, &state.addin_root, &state.panel_root);
-    let Some(file_path) = resolve_file_path(root, relative) else {
+    let (kind, root, url_path) = asset_target(uri.path(), &state.addin_root, &state.panel_root);
+    let Some(relative) = normalize_relative(url_path) else {
         return (StatusCode::NOT_FOUND, "Not Found").into_response();
     };
-
-    let file_data = match fs::read(&file_path) {
-        Ok(data) => data,
-        Err(error) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                error.to_string(),
-            )
-                .into_response()
-        }
+    let Some((file_data, mime_type)) = load_asset(kind, root, &relative) else {
+        return (StatusCode::NOT_FOUND, "Not Found").into_response();
     };
 
     (
         StatusCode::OK,
         [
-            (
-                header::CONTENT_TYPE,
-                HeaderValue::from_static(mime_type_for(&file_path)),
-            ),
+            (header::CONTENT_TYPE, HeaderValue::from_static(mime_type)),
             (
                 header::CACHE_CONTROL,
                 HeaderValue::from_static("no-store, max-age=0"),
@@ -325,10 +340,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn safe_path_blocks_parent_segments() {
-        let root = PathBuf::from("E:/tmp/addin");
-        assert!(safe_path_from_url(&root, "/js/main.js").is_some());
-        assert!(safe_path_from_url(&root, "/../secret.txt").is_none());
+    fn normalize_relative_blocks_parent_segments() {
+        assert_eq!(
+            normalize_relative("/js/main.js").as_deref(),
+            Some("js/main.js")
+        );
+        assert_eq!(normalize_relative("").as_deref(), Some("index.html"));
+        assert_eq!(normalize_relative("/").as_deref(), Some("index.html"));
+        assert!(normalize_relative("/../secret.txt").is_none());
+        assert!(normalize_relative("/C:/windows/win.ini").is_none());
     }
 
     #[test]
@@ -347,28 +367,28 @@ mod tests {
         let panel = FsPath::new("E:/tmp/panel");
 
         assert_eq!(
-            asset_root_and_relative("/panel/index.html", addin, panel),
-            (panel, "/index.html")
+            asset_target("/panel/index.html", addin, panel),
+            (AssetKind::Panel, panel, "/index.html")
         );
         assert_eq!(
-            asset_root_and_relative("/panel", addin, panel),
-            (panel, "")
+            asset_target("/panel", addin, panel),
+            (AssetKind::Panel, panel, "")
         );
         assert_eq!(
-            asset_root_and_relative("/panel/assets/index-abc.js", addin, panel),
-            (panel, "/assets/index-abc.js")
+            asset_target("/panel/assets/index-abc.js", addin, panel),
+            (AssetKind::Panel, panel, "/assets/index-abc.js")
         );
         assert_eq!(
-            asset_root_and_relative("/js/ribbon.js", addin, panel),
-            (addin, "/js/ribbon.js")
+            asset_target("/js/ribbon.js", addin, panel),
+            (AssetKind::Addin, addin, "/js/ribbon.js")
         );
         assert_eq!(
-            asset_root_and_relative("/", addin, panel),
-            (addin, "/")
+            asset_target("/", addin, panel),
+            (AssetKind::Addin, addin, "/")
         );
         assert_eq!(
-            asset_root_and_relative("/panelfoo", addin, panel),
-            (addin, "/panelfoo")
+            asset_target("/panelfoo", addin, panel),
+            (AssetKind::Addin, addin, "/panelfoo")
         );
     }
 }

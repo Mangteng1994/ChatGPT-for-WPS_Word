@@ -5,6 +5,7 @@ mod config;
 mod codex_runner;
 mod detach;
 mod diff_popup;
+mod embedded;
 mod install;
 mod layout;
 mod protocol;

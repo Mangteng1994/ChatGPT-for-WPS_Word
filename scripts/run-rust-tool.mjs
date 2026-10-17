@@ -17,7 +17,7 @@ function firstExisting(candidates) {
   return candidates.find((candidate) => candidate && existsSync(candidate)) || null;
 }
 
-function resolveCargoExe() {
+export function resolveCargoExe() {
   const fileName = process.platform === "win32" ? "cargo.exe" : "cargo";
   return firstExisting([
     process.env.CARGO_EXE,
@@ -33,6 +33,8 @@ function childEnvironment(cargoExe) {
   const entries = [cargoExe ? path.dirname(cargoExe) : null, llvmBin, ...splitPathList(process.env.PATH)].filter(Boolean);
   return { ...process.env, PATH: [...new Set(entries)].join(path.delimiter), RUST_LOG: process.env.RUST_LOG?.trim() || "warn" };
 }
+
+export { childEnvironment, projectRoot, rustProjectRoot, manifestPath, binaryName };
 
 function resolveBinary() {
   if (process.env.CODEX_RUST_BIN?.trim()) return path.resolve(projectRoot, process.env.CODEX_RUST_BIN.trim());
@@ -103,7 +105,16 @@ function launch() {
   child.on("error", (error) => { console.error(error.message); process.exitCode = 1; });
 }
 
-try { launch(); } catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+// 只在作为入口脚本运行时才执行；被 package-exe.mjs 之类的模块导入时不做任何事。
+function isEntryPoint() {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  return path.resolve(entry) === path.resolve(fileURLToPath(import.meta.url));
+}
+
+if (isEntryPoint()) {
+  try { launch(); } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
+  }
 }

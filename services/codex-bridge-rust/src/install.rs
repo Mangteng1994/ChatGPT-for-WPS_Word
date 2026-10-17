@@ -1,5 +1,6 @@
 use crate::{
     addon_registry, config,
+    embedded::{self, AssetKind},
     layout::{self, LayoutMode},
     service_control,
 };
@@ -184,8 +185,18 @@ pub async fn doctor() -> Result<()> {
         warnings.push(format!("开机自启任务缺失: {AUTOSTART_TASK_NAME}（执行 `{} install` 修复）", exe_name()));
     }
 
+    if layout.addin_root.is_dir() {
+        println!("加载项资源: {}", layout.addin_root.display());
+    } else if embedded::has_assets(AssetKind::Addin) {
+        println!("加载项资源: 内嵌在可执行文件中");
+    } else {
+        problems.push(format!("加载项资源缺失: {}", layout.addin_root.display()));
+    }
+
     if layout.panel_root.is_dir() {
         println!("面板资源: {}", layout.panel_root.display());
+    } else if embedded::has_assets(AssetKind::Panel) {
+        println!("面板资源: 内嵌在可执行文件中");
     } else {
         warnings.push(format!(
             "面板资源目录缺失: {}（仓库模式请运行 npm run panel:build）",

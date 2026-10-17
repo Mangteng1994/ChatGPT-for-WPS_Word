@@ -3,6 +3,11 @@ name = "codex-for-wps-word-rust"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+# 把加载项与面板静态资源编进可执行文件，供单文件分发使用。
+# 默认关闭：开发时仍从 apps/ 目录读取，改完面板刷新即可生效。
+embedded-assets = []
+
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"
