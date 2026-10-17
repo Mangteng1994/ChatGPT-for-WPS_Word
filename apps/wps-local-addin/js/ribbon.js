@@ -1,14 +1,12 @@
 const DEFAULT_PANEL_URL = "http://127.0.0.1:5173/index.html";
+const TASKPANE_BOOTSTRAP_URL = "http://127.0.0.1:3889/taskpane-loader.html";
 const SERVICE_ACTION_PATH_PREFIX = "/__codex/service/";
 const SERVICE_ACTION_ORIGIN_FALLBACKS = ["http://127.0.0.1:3889", "http://localhost:3889"];
 const TASKPANE_KEY = "codex_taskpane_id";
 const TASKPANE_URL_KEY = "codex_taskpane_url";
 const PANEL_URL_KEY = "codex_panel_url";
-const PANEL_START_DELAY_MS = 6000;
 const SERVICE_STATUS_DELAY_MS = 9000;
-let openPanelTimer = null;
 let openingPanel = false;
-let cachedTaskPane = null;
 let serviceLogDir = "logs";
 
 function getApp() {
@@ -38,6 +36,13 @@ function setPanelUrl(url) {
   app.PluginStorage.setItem(PANEL_URL_KEY, url);
 }
 
+function normalizePanelUrl(url) {
+  const normalized = String(url || "").trim();
+  if (!normalized) return "";
+  if (!/^https?:\/\/[^\s/]+(?:\/[^\s]*)?$/i.test(normalized)) return "";
+  return normalized;
+}
+
 function ensurePanelUrl() {
   const current = getPanelUrl();
   if (!current || current.indexOf("127.0.0.1:3889") >= 0 || current.indexOf("about:blank") >= 0) {
@@ -47,57 +52,8 @@ function ensurePanelUrl() {
   return current;
 }
 
-function getOrCreateTaskPane(forceRecreate) {
-  const app = getApp();
-  if (!app) return null;
-
-  const panelUrl = ensurePanelUrl();
-  if (!forceRecreate && cachedTaskPane) {
-    return cachedTaskPane;
-  }
-
-  let taskpaneId = app.PluginStorage.getItem(TASKPANE_KEY);
-  if (!forceRecreate && taskpaneId) {
-    try {
-      const existing = app.GetTaskPane(taskpaneId);
-      if (existing) {
-        cachedTaskPane = existing;
-        return existing;
-      }
-    } catch (_error) {
-      app.PluginStorage.setItem(TASKPANE_KEY, "");
-      app.PluginStorage.setItem(TASKPANE_URL_KEY, "");
-    }
-  }
-
-  const pane = app.CreateTaskPane(panelUrl);
-  cachedTaskPane = pane;
-  app.PluginStorage.setItem(TASKPANE_KEY, pane.ID);
-  app.PluginStorage.setItem(TASKPANE_URL_KEY, panelUrl);
-  return pane;
-}
-
-function getExistingTaskPane() {
-  const app = getApp();
-  if (!app) return null;
-  if (cachedTaskPane) return cachedTaskPane;
-
-  const taskpaneId = app.PluginStorage.getItem(TASKPANE_KEY);
-  if (!taskpaneId) return null;
-  try {
-    const pane = app.GetTaskPane(taskpaneId);
-    if (pane) cachedTaskPane = pane;
-    return pane || null;
-  } catch (_error) {
-    app.PluginStorage.setItem(TASKPANE_KEY, "");
-    app.PluginStorage.setItem(TASKPANE_URL_KEY, "");
-    return null;
-  }
-}
-
 function clearTaskPaneCache() {
   const app = getApp();
-  cachedTaskPane = null;
   if (!app) return;
   try {
     app.PluginStorage.setItem(TASKPANE_KEY, "");
@@ -106,17 +62,73 @@ function clearTaskPaneCache() {
   }
 }
 
+function getExistingTaskPane() {
+  const app = getApp();
+  if (!app) return null;
+
+  let taskpaneId = "";
+  try {
+    taskpaneId = app.PluginStorage.getItem(TASKPANE_KEY);
+  } catch (_error) {
+    return null;
+  }
+  if (!taskpaneId) return null;
+
+  try {
+    const pane = app.GetTaskPane(taskpaneId);
+    if (pane) return pane;
+  } catch (_error) {
+  }
+  clearTaskPaneCache();
+  return null;
+}
+
+function getOrCreateTaskPane(forceRecreate) {
+  const app = getApp();
+  if (!app) throw new Error("未检测到 WPS Application。");
+
+  if (!forceRecreate) {
+    const existing = getExistingTaskPane();
+    if (existing) return existing;
+  } else {
+    clearTaskPaneCache();
+  }
+
+  const panelUrl = ensurePanelUrl();
+  const bootstrapUrl = TASKPANE_BOOTSTRAP_URL + "?target=" + encodeURIComponent(panelUrl);
+  let pane = null;
+  try {
+    // Keep CreateTaskPane lightweight. Loading the full Vite application here
+    // can block the WPS ribbon callback while the embedded browser initializes.
+    pane = app.CreateTaskPane(bootstrapUrl, "Codex for WPS Word");
+  } catch (error) {
+    throw new Error("WPS 创建面板时出错：" + getErrorMessage(error));
+  }
+  if (!pane) {
+    throw new Error(
+      "WPS 拒绝创建面板。引导地址：" + TASKPANE_BOOTSTRAP_URL +
+      "。请确认在 WPS 文字的 .doc/.docx 文档中使用。"
+    );
+  }
+  app.PluginStorage.setItem(TASKPANE_KEY, pane.ID);
+  app.PluginStorage.setItem(TASKPANE_URL_KEY, panelUrl);
+  return pane;
+}
+
 function activateTaskPane(pane) {
   const app = getApp();
   if (!app || !pane) return false;
   try {
+    let dockPosition = 2;
+    if (app.Enum && app.Enum.JSKsoEnum_msoCTPDockPositionRight !== undefined) {
+      dockPosition = app.Enum.JSKsoEnum_msoCTPDockPositionRight;
+    }
+    pane.DockPosition = dockPosition;
     pane.Visible = true;
-    pane.DockPosition = app.Enum ? app.Enum.msoCTPDockPositionRight : 2;
-    cachedTaskPane = pane;
     return true;
-  } catch (_error) {
+  } catch (error) {
     clearTaskPaneCache();
-    return false;
+    throw new Error("WPS 显示面板时出错：" + getErrorMessage(error));
   }
 }
 
@@ -127,8 +139,26 @@ function showTaskPane() {
   if (!pane) {
     pane = getOrCreateTaskPane(false);
   }
-  if (!pane) return;
-  activateTaskPane(pane);
+  if (!pane) return false;
+  try {
+    return activateTaskPane(pane);
+  } catch (firstError) {
+    // WPS can retain a native pane proxy after its owner window changes.
+    // Discard it and make one fresh attempt before surfacing the WPS error.
+    try {
+      pane = getOrCreateTaskPane(true);
+      return activateTaskPane(pane);
+    } catch (retryError) {
+      throw new Error(
+        getErrorMessage(firstError) + "；重建面板后仍失败：" + getErrorMessage(retryError)
+      );
+    }
+  }
+}
+
+function getErrorMessage(error) {
+  if (error && error.message) return String(error.message);
+  return String(error || "未知错误");
 }
 
 function OnAddinLoad(ribbonUI) {
@@ -142,6 +172,13 @@ function OnAddinLoad(ribbonUI) {
 
 function normalizeBaseUrl(url) {
   return String(url || "").replace(/\/+$/, "");
+}
+
+function getUrlBase() {
+  const loc = window.location || document.location;
+  if (typeof loc === "string") return loc;
+  if (loc && typeof loc.href === "string") return loc.href;
+  return "";
 }
 
 function getHttpOrigin() {
@@ -308,6 +345,15 @@ function OnAction(control) {
   if (control.Id === "btnStopServices") {
     requestServiceAction("stop", function (error) {
       if (error) {
+        const message = String((error && error.message) || "");
+        if (message.indexOf("网络请求失败") >= 0 || message.indexOf("HTTP 0") >= 0) {
+          alert(
+            "本地服务控制接口不可达，通常表示服务已经停止。\n" +
+            "如需强制停止，请在项目目录执行：npm run stop:wps-codex\n" +
+            "日志目录: " + serviceLogDir
+          );
+          return;
+        }
         alert("关闭本地服务失败：" + error.message + "\n日志目录: " + serviceLogDir);
         return;
       }
@@ -326,46 +372,49 @@ function OnAction(control) {
 
   if (control.Id === "btnSetPanelUrl") {
     const current = getPanelUrl();
-    const input = prompt("请输入面板地址（默认 http://127.0.0.1:5173/index.html）", current);
-    if (input === null) return true;
+    let input = null;
+    try {
+      if (typeof app.InputBox !== "function") {
+        throw new Error("当前 WPS 版本未提供 InputBox 接口");
+      }
+      input = app.InputBox("请输入面板地址", "Codex 面板地址", current, undefined, undefined, undefined, undefined, 2);
+    } catch (error) {
+      alert("无法打开 WPS 输入框：" + getErrorMessage(error) + "\n当前面板地址仍为：" + current);
+      return true;
+    }
+    if (input === false || input === null || input === "") return true;
     const normalized = normalizePanelUrl(input);
     if (!normalized) {
       alert("地址不能为空");
       return true;
     }
     setPanelUrl(normalized);
-    cachedTaskPane = null;
-    app.PluginStorage.setItem(TASKPANE_KEY, "");
-    app.PluginStorage.setItem(TASKPANE_URL_KEY, "");
+    clearTaskPaneCache();
     alert("面板地址已更新为: " + normalized);
     return true;
   }
 
   if (control.Id === "btnTogglePanel") {
-    const existing = getExistingTaskPane();
-    if (existing && activateTaskPane(existing)) {
-      return true;
-    }
     if (openingPanel) {
       return true;
     }
 
     openingPanel = true;
-    requestServiceAction("start", function (_error) {
-    });
-    if (openPanelTimer) {
-      clearTimeout(openPanelTimer);
-      openPanelTimer = null;
-    }
-    openPanelTimer = setTimeout(function () {
-      openPanelTimer = null;
+    // Return from the native Ribbon mouse callback before creating or showing
+    // a child window. WPS 12 can otherwise retain mouse capture on the Ribbon,
+    // leaving both built-in tabs and the title-bar controls unclickable while
+    // the task pane remains visible.
+    setTimeout(function () {
       try {
-        showTaskPane();
-      } catch (_error) {
+        if (!showTaskPane()) {
+          throw new Error("WPS 没有返回任务窗格对象。");
+        }
+      } catch (error) {
+        alert("打开 Codex 面板失败：" + getErrorMessage(error) + "\n日志目录: " + serviceLogDir);
       } finally {
         openingPanel = false;
       }
-    }, PANEL_START_DELAY_MS);
+    }, 0);
     return true;
   }
 

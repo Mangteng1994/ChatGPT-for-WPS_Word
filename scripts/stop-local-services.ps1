@@ -1,6 +1,8 @@
 $ErrorActionPreference = "Stop"
 
-$ports = @(3889, 32123, 5173, 5174)
+# Keep 3889 (wps-addon-host) alive so ribbon service actions can return a response.
+# Stop only bridge/panel related ports here, matching README behavior.
+$ports = @(32123, 5173, 5174)
 $connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
   Where-Object { $ports -contains $_.LocalPort }
 

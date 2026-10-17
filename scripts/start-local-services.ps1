@@ -2,7 +2,6 @@ $ErrorActionPreference = "Stop"
 
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $registerScript = Join-Path $PSScriptRoot "register-wps-addin.ps1"
-$addonHostScript = Join-Path $PSScriptRoot "wps-addon-host.mjs"
 $logDir = Join-Path $root "logs"
 
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -155,11 +154,7 @@ function Start-NpmScript([string]$ScriptName) {
 }
 
 function Start-AddonHost() {
-  $nodePath = Resolve-Executable "node.exe" @(
-    (Join-Path $env:ProgramFiles "nodejs\node.exe"),
-    (Join-Path ${env:ProgramFiles(x86)} "nodejs\node.exe")
-  )
-  Start-LoggedProcess "wps-addon-host" $nodePath @($addonHostScript) $root
+  Start-NpmScript "addin:host"
 }
 
 Write-Log "Start requested. root=$root"
@@ -170,9 +165,9 @@ if (Test-Path -LiteralPath $registerScript) {
 }
 
 $serviceChecks = @(
-  @{ Name = "WPS add-in host"; Port = 3889; Url = "http://127.0.0.1:3889/__codex/service/ping"; Method = "POST"; Body = "{}"; Expected = '"ok":true'; Starter = "addin" },
-  @{ Name = "codex bridge"; Port = 32123; Url = "http://127.0.0.1:32123/health"; Expected = '"service":"codex-bridge"'; Starter = "bridge" },
-  @{ Name = "WPS panel"; Port = 5173; Url = "http://127.0.0.1:5173/index.html"; Expected = "Codex for WPS Word"; Starter = "panel" }
+  @{ Name = "WPS add-in host"; Port = 3889; Url = "http://127.0.0.1:3889/__codex/service/ping"; Method = "POST"; Body = "{}"; Expected = '"ok":true'; Starter = "addin"; TimeoutSeconds = 60 },
+  @{ Name = "codex bridge"; Port = 32123; Url = "http://127.0.0.1:32123/health"; Expected = '"service":"codex-bridge"'; Starter = "bridge"; TimeoutSeconds = 60 },
+  @{ Name = "WPS panel"; Port = 5173; Url = "http://127.0.0.1:5173/index.html"; Expected = "Codex for WPS Word"; Starter = "panel"; TimeoutSeconds = 20 }
 )
 
 foreach ($service in $serviceChecks) {
@@ -205,7 +200,8 @@ $failed = @()
 foreach ($check in $serviceChecks) {
   $method = if ($check.Method) { [string]$check.Method } else { "GET" }
   $body = if ($check.Body) { [string]$check.Body } else { "" }
-  if (Wait-ServiceHealthy $check.Url $check.Expected 20 $method $body) {
+  $timeoutSeconds = if ($check.TimeoutSeconds) { [int]$check.TimeoutSeconds } else { 20 }
+  if (Wait-ServiceHealthy $check.Url $check.Expected $timeoutSeconds $method $body) {
     Write-Log "$($check.Name) is healthy at $($check.Url)"
   } else {
     $owner = Get-PortOwner $check.Port

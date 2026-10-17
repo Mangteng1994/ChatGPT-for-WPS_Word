@@ -72,6 +72,10 @@ export function runCodexStream(options: RunOptions, callbacks: RunCodexStreamCal
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
     shell: shouldUseShell(options.cliPath),
+    env: {
+      ...process.env,
+      RUST_LOG: process.env.RUST_LOG?.trim() || "warn",
+    },
   });
 
   let output = "";
