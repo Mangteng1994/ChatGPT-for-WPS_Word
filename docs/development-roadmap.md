@@ -10,10 +10,10 @@
 
 ## 当前状态
 
-- 已有 WPS 本地加载项、面板页、`codex-bridge` 和一键启动脚本。
+- 已有 WPS 本地加载项、面板页、Rust bridge（兼容 `codex-bridge` API）和一键启动脚本。
 - 已支持会话、选区上下文、模型选择、思考长度、图片上传、插图占位、写回选区、插入回复。
 - 已完成 `P1` 的核心：流式输出和停止生成。
-- 已增强本地服务启动：WPS ribbon 按钮会调用启动脚本，脚本会解析 `npm.cmd/node.exe`、写日志并确认端口。
+- 已增强本地服务启动：WPS ribbon 按钮会调用启动脚本，脚本统一通过 npm 脚本入口拉起 Rust 宿主/bridge/panel、写日志并确认端口。
 
 ## 开发顺序
 
@@ -25,7 +25,10 @@
 - WPS ribbon 启动本地服务时使用 `powershell.exe -NoProfile -ExecutionPolicy Bypass`。
 - `scripts/start-local-services.ps1` 写入 `logs/start-local-services.log`。
 - 启动后轮询确认 `3889`、`32123`、`5173` 端口。
-- 解析 `npm.cmd` 和 `node.exe` 的完整路径，降低 WPS 进程 PATH 不完整导致的失败概率。
+- 解析 `npm.cmd` 的完整路径，降低 WPS 进程 PATH 不完整导致的失败概率。
+- `addin:host` 保持为加载项宿主统一入口，当前默认已切到 Rust 宿主，用户操作方式保持不变。
+- Rust 宿主已内建 `start/stop/check` 运行时控制逻辑，WPS 按钮不再回调旧 PowerShell 服务控制脚本。
+- `npm run services:check` 与 `npm run stop:wps-codex` 已可直接走 Rust 服务控制；`start:wps-codex` 继续保留稳定的外层启动 wrapper。
 
 后续可补：
 - 面板内增加 `/health` 状态展示。
@@ -42,8 +45,8 @@
 目标：对话不再等待完整返回，用户可以中断长任务。
 
 已完成：
-- `services/codex-bridge/src/codex-runner.ts` 新增 `runCodexStream(...)`。
-- `services/codex-bridge/src/server.ts` 新增 `POST /run/stream` 和 `POST /run/cancel`。
+- `../codex-for-wps-word-rust/src/codex_runner.rs` 新增 `run_codex_with_sink(...)`。
+- `../codex-for-wps-word-rust/src/server.rs` 新增 `POST /run/stream` 和 `POST /run/cancel`。
 - `apps/wps-panel/src/api-client.ts` 新增 `runByBridgeStream(...)` 和 `cancelBridgeRun(...)`。
 - `apps/wps-panel/src/main.ts` 支持流式渲染和停止按钮。
 
@@ -174,7 +177,7 @@
 - `apps/wps-panel/src/document-actions.ts`：写回、插入、Diff 审核入口。
 - `apps/wps-panel/src/diff.ts`：纯文本差异计算。
 - `apps/wps-panel/src/prompt-presets.ts`：预设动作和 prompt 构造。
-- `services/codex-bridge/src/health.ts`：本地环境与服务状态检查。
+- `../codex-for-wps-word-rust/src/server.rs` 与 `../codex-for-wps-word-rust/src/config.rs`：本地环境与服务状态检查。
 
 ## 风险和原则
 

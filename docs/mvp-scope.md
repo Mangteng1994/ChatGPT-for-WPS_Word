@@ -44,7 +44,7 @@
 
 ## Runtime Config (Bridge)
 
-- 优先级：环境变量 > `services/codex-bridge/config.local.json`
+- 优先级：环境变量 > `../codex-for-wps-word-rust/config.local.json`
 - 必填：
   - `CODEX_WORKING_DIR`（或本地配置文件 `workingDir`）
 - 可选：
