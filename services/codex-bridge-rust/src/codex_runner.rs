@@ -72,6 +72,8 @@ fn assistant_text_from_event(event: &Value) -> String {
 
 fn build_codex_args(options: &RunOptions) -> Vec<String> {
     let mut args = vec!["exec".to_string(), "--json".to_string(), "-C".to_string(), options.working_dir.to_string_lossy().to_string()];
+    // 文档工作区通常不是 git 仓库；不加这个开关，Codex CLI 会直接拒绝执行。
+    args.push("--skip-git-repo-check".to_string());
     if let Some(model) = options.model.as_ref().map(|item| item.trim()).filter(|item| !item.is_empty()) {
         args.push("--model".to_string());
         args.push(model.to_string());
@@ -252,7 +254,9 @@ pub async fn run_codex_with_sink(
         .await
         .context("写入 Codex stdin 失败")?;
     stdin.write_all(b"\n").await.ok();
-    stdin.shutdown().await.ok();
+    // Windows 匿名管道不支持半关闭，tokio 的 shutdown() 不会真的关掉写端；
+    // 不显式 drop，`codex exec ... -` 会一直等 stdin 的 EOF（实测永久挂住）。
+    drop(stdin);
 
     let stdout = child
         .stdout
@@ -341,6 +345,7 @@ mod tests {
         let args = build_codex_args(&options);
         assert!(args.contains(&"--model".to_string()));
         assert!(args.contains(&"gpt-5.4".to_string()));
+        assert!(args.contains(&"--skip-git-repo-check".to_string()));
         assert!(args.contains(&"--sandbox".to_string()));
         assert!(args.contains(&"workspace-write".to_string()));
         assert!(args.contains(&"resume".to_string()));

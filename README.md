@@ -172,6 +172,27 @@ npm run package:exe
 - exe 未做代码签名，首次运行会触发 SmartScreen 提示（选「更多信息」→「仍要运行」）。
 - 系统需要 Windows 10 及以上（依赖 UCRT）。
 
+### CLI 与模型是怎么选的
+
+- **CLI**：优先用最近更新的原生 `codex.exe`。来源依次是 `CODEX_CLI_PATH` → 配置文件里的路径 → PATH 上的 `codex` →
+  `%APPDATA%\npm\codex.cmd` → `%LOCALAPPDATA%\OpenAI\Codex\bin\codex.exe` → 桌面版运行时
+  `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`，探测到的候选按文件更新时间从新到旧排序（面板里能看到全部候选）。
+  npm 的 `codex.cmd` 只是 Node 启动器，会被自动换成包内的原生二进制，运行期因此不需要 Node。
+- **版本会影响模型可用性**：实测 npm 的 0.156.1 对账号里的 `gpt-6.1-sol` 报 `model not supported`，0.163.0-alpha 正常；所以排序偏向较新的那份，必要时在面板里手动切换。
+- **模型**：`~/.codex/config.toml` 里的 `model` 放在候选首位并作为面板默认值，再补 CLI 自己的缓存
+  `~/.codex/models_cache.json` 里的可见 slug，最后才是内置兜底列表。
+- **工作目录不必是 git 仓库**：调用 CLI 时固定带 `--skip-git-repo-check`（安装态的默认工作目录本来也不是仓库）。
+- 面板「Codex CLI 配置」可改 CLI 路径与工作目录；`doctor` 打印实际生效的路径，配置的 CLI 是脚本启动器时还会给出提示。
+
+### 无 Node 环境实测（阶段 6 验收）
+
+把 exe 单独放进 `%LOCALAPPDATA%\CodexForWpsWord`，并把当前进程 `PATH` 里的 Node / npm 目录全部剔除后：
+
+- `install`、`doctor` 通过，加载项与面板资源都显示「内嵌在可执行文件中」，注册与自启任务正常；
+- 直接请求 bridge 的 `/run/stream` 提问，回答正确；提问期间进程树只有 `codex.exe`，没有 `node.exe` / `cmd.exe`；
+- 面板在浏览器里从 `3889/panel/index.html` 打开，模型下拉由 bridge 填充，面板内提问能拿到回答；
+- 全杀服务后触发自启任务，双服务自动恢复；`uninstall` 后安装目录、计划任务、`publish.xml` 注册、监听端口全部无残留。
+
 开发态与打包态的取舍：默认构建（`embedded-assets` 关闭）始终从 `apps/` 目录读资源，改完面板刷新即可生效；打包时才启用内嵌，所以日常开发不受影响。
 
 自检命令（在仓库根目录执行）：

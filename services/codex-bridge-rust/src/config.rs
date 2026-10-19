@@ -39,9 +39,6 @@ fn config_path() -> PathBuf {
 }
 
 fn home_dir() -> PathBuf {
-    if let Some(value) = env::var_os("CODEX_HOME") {
-        return PathBuf::from(value);
-    }
     if let Some(value) = env::var_os("USERPROFILE") {
         return PathBuf::from(value);
     }
@@ -52,6 +49,15 @@ fn home_dir() -> PathBuf {
         return PathBuf::from(value);
     }
     env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
+/// Codex 自己的目录：优先环境变量 `CODEX_HOME`，否则用户主目录下的 `.codex`。
+/// 里面的 `config.toml`、`models_cache.json` 是 CLI 的配置与模型注册表缓存。
+fn codex_home_dir() -> PathBuf {
+    if let Some(value) = env::var_os("CODEX_HOME") {
+        return PathBuf::from(value);
+    }
+    home_dir().join(".codex")
 }
 
 fn clamp_port(value: u32, fallback: u16) -> u16 {
@@ -143,24 +149,135 @@ fn search_command_in_path(command: &str) -> Vec<PathBuf> {
     results
 }
 
+/// 判断是否为需要 Node 才能运行的脚本启动器（`.cmd` / `.bat` / `.ps1`）。
+pub fn is_script_shim(value: &str) -> bool {
+    matches!(
+        Path::new(value)
+            .extension()
+            .and_then(|item| item.to_str())
+            .map(|item| item.to_ascii_lowercase())
+            .as_deref(),
+        Some("cmd") | Some("bat") | Some("ps1")
+    )
+}
+
+/// 找到 npm 包内自带的原生 `codex.exe`。
+///
+/// npm 全局安装的启动器是 `<prefix>\codex.cmd`（Node 脚本），真正的 CLI 是平台包里的
+/// `@openai\codex-win32-x64\vendor\<triple>\bin\codex.exe`；依赖提升时也可能直接挂在
+/// `<prefix>\node_modules\` 下，两种布局都试一次。
+#[cfg(all(windows, target_arch = "x86_64"))]
+fn native_binary_for_shim(shim: &Path) -> Option<PathBuf> {
+    let prefix = shim.parent()?;
+    let node_modules = prefix.join("node_modules");
+    let binary = Path::new("vendor")
+        .join("x86_64-pc-windows-msvc")
+        .join("bin")
+        .join("codex.exe");
+    [
+        node_modules
+            .join("@openai")
+            .join("codex")
+            .join("node_modules")
+            .join("@openai")
+            .join("codex-win32-x64")
+            .join(&binary),
+        node_modules
+            .join("@openai")
+            .join("codex-win32-x64")
+            .join(&binary),
+    ]
+    .into_iter()
+    .find(|candidate| candidate.is_file())
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+fn native_binary_for_shim(shim: &Path) -> Option<PathBuf> {
+    let _ = shim;
+    None
+}
+
+/// 能用原生二进制就不用脚本启动器：免 Node 依赖，也免 `cmd.exe` 中转。
+fn prefer_native_binary(candidate: PathBuf) -> String {
+    if is_script_shim(&candidate.to_string_lossy()) {
+        if let Some(native) = native_binary_for_shim(&candidate) {
+            return native.to_string_lossy().to_string();
+        }
+    }
+    candidate.to_string_lossy().to_string()
+}
+
+/// 桌面版 Codex 把运行时放在 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`，
+/// 目录名随桌面版每次更新变化，这里把它作为候选之一枚举出来。
+fn desktop_runtime_candidates(home: &Path) -> Vec<PathBuf> {
+    let root = home
+        .join("AppData")
+        .join("Local")
+        .join("OpenAI")
+        .join("Codex")
+        .join("bin");
+    let Ok(entries) = fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path().join("codex.exe"))
+        .filter(|candidate| candidate.is_file())
+        .collect()
+}
+
+/// 把候选规整成真正会被执行的二进制，并按更新时间从新到旧排序。
+///
+/// Codex 的模型支持随版本变化（旧版拿不到新模型），所以默认优先较新的那份：面板里列出全部
+/// 候选供手动切换，而 `CODEX_CLI_PATH` 与配置文件里的显式路径优先级高于这里的排序。
+fn rank_cli_candidates(candidates: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut unique: Vec<PathBuf> = Vec::new();
+    let mut seen = HashSet::new();
+    for candidate in candidates {
+        let effective = PathBuf::from(prefer_native_binary(candidate));
+        if seen.insert(normalize_key(&effective)) {
+            unique.push(effective);
+        }
+    }
+    unique.sort_by(|a, b| {
+        let left = fs::metadata(a).and_then(|item| item.modified()).ok();
+        let right = fs::metadata(b).and_then(|item| item.modified()).ok();
+        right.cmp(&left)
+    });
+    unique
+}
+
 pub fn detect_cli_paths() -> Vec<String> {
     let mut result = Vec::new();
     let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
 
     if let Some(value) = non_empty(env::var("CODEX_CLI_PATH").ok()) {
         push_unique(&mut result, &mut seen, PathBuf::from(value));
     }
 
     for candidate in search_command_in_path("codex") {
-        push_unique(&mut result, &mut seen, candidate);
+        candidates.push(candidate);
     }
 
     let home = home_dir();
-    let fallback_candidates = [
-        home.join("AppData").join("Roaming").join("npm").join("codex.cmd"),
-        home.join("AppData").join("Local").join("OpenAI").join("Codex").join("bin").join("codex.exe"),
-    ];
-    for candidate in fallback_candidates {
+    candidates.push(
+        home.join("AppData")
+            .join("Roaming")
+            .join("npm")
+            .join("codex.cmd"),
+    );
+    candidates.push(
+        home.join("AppData")
+            .join("Local")
+            .join("OpenAI")
+            .join("Codex")
+            .join("bin")
+            .join("codex.exe"),
+    );
+    candidates.extend(desktop_runtime_candidates(&home));
+
+    for candidate in rank_cli_candidates(candidates) {
         push_unique(&mut result, &mut seen, candidate);
     }
 
@@ -178,7 +295,7 @@ pub fn resolve_cli_path(input: &str) -> String {
 
     let candidate = PathBuf::from(value);
     if candidate.exists() {
-        return value.to_string();
+        return prefer_native_binary(candidate);
     }
 
     #[cfg(windows)]
@@ -187,7 +304,7 @@ pub fn resolve_cli_path(input: &str) -> String {
             for suffix in [".cmd", ".exe", ".bat"] {
                 let next = PathBuf::from(format!("{value}{suffix}"));
                 if next.exists() {
-                    return next.to_string_lossy().to_string();
+                    return prefer_native_binary(next);
                 }
             }
 
@@ -205,7 +322,7 @@ pub fn resolve_cli_path(input: &str) -> String {
                     .to_lowercase()
                     == base_name
             }) {
-                return matched;
+                return prefer_native_binary(PathBuf::from(matched));
             }
         }
     }
@@ -287,10 +404,7 @@ pub fn load_runtime_config() -> RuntimeConfig {
 }
 
 fn read_codex_config_toml() -> String {
-    let codex_home = non_empty(env::var("CODEX_HOME").ok())
-        .map(PathBuf::from)
-        .unwrap_or_else(home_dir);
-    let config_path = codex_home.join("config.toml");
+    let config_path = codex_home_dir().join("config.toml");
     match fs::read_to_string(&config_path) {
         Ok(content) => content,
         Err(error) if error.kind() == io::ErrorKind::NotFound => String::new(),
@@ -325,6 +439,43 @@ fn extract_model_value(line: &str) -> Option<String> {
     Some(inner.to_string())
 }
 
+/// Codex CLI 会把服务端下发的模型清单缓存到 `~/.codex/models_cache.json`。
+/// 从这里取「可见」的 slug，比写死的默认列表更贴近当前 CLI 与账号的真实可用模型。
+fn cached_model_slugs() -> Vec<String> {
+    let path = codex_home_dir().join("models_cache.json");
+    let Ok(content) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    parse_model_slugs(&content)
+}
+
+fn parse_model_slugs(content: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
+        return Vec::new();
+    };
+    let Some(models) = value.get("models").and_then(|item| item.as_array()) else {
+        return Vec::new();
+    };
+    let mut slugs = Vec::new();
+    for model in models {
+        if model.get("visibility").and_then(|item| item.as_str()) == Some("hide") {
+            continue;
+        }
+        let slug = model
+            .get("slug")
+            .and_then(|item| item.as_str())
+            .map(str::trim)
+            .filter(|item| !item.is_empty());
+        if let Some(slug) = slug {
+            let slug = slug.to_string();
+            if !slugs.contains(&slug) {
+                slugs.push(slug);
+            }
+        }
+    }
+    slugs
+}
+
 pub fn list_models() -> (Vec<String>, Option<String>) {
     let toml = read_codex_config_toml();
     let mut models = Vec::new();
@@ -339,6 +490,12 @@ pub fn list_models() -> (Vec<String>, Option<String>) {
             if seen.insert(model.clone()) {
                 models.push(model);
             }
+        }
+    }
+
+    for model in cached_model_slugs() {
+        if seen.insert(model.clone()) {
+            models.push(model);
         }
     }
 
@@ -551,5 +708,93 @@ mod tests {
         assert!(prompt.contains("用户上传了图片附件"));
         assert!(prompt.contains("用户上传了文件附件"));
         assert!(prompt.contains("帮我看看"));
+    }
+
+    #[test]
+    fn parse_model_slugs_skips_hidden_and_broken_json() {
+        let content = r#"{"models":[{"slug":"gpt-6.1-sol"},{"slug":"codex-auto-review","visibility":"hide"},{"slug":" gpt-5.6-sol "},{"slug":""}]}"#;
+        assert_eq!(
+            parse_model_slugs(content),
+            vec!["gpt-6.1-sol".to_string(), "gpt-5.6-sol".to_string()]
+        );
+        assert!(parse_model_slugs("not json").is_empty());
+        assert!(parse_model_slugs(r#"{"other":[]}"#).is_empty());
+    }
+
+    #[test]
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    fn rank_cli_candidates_maps_shim_and_dedupes() {
+        let root = unique_temp_dir();
+        let shim = root.join("npm").join("codex.cmd");
+        let native = shim
+            .parent()
+            .expect("shim 目录")
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("node_modules")
+            .join("@openai")
+            .join("codex-win32-x64")
+            .join("vendor")
+            .join("x86_64-pc-windows-msvc")
+            .join("bin")
+            .join("codex.exe");
+        fs::create_dir_all(native.parent().expect("原生二进制目录")).expect("建立目录");
+        fs::write(&shim, "").expect("写 shim");
+        fs::write(&native, "").expect("写原生二进制");
+
+        let ranked = rank_cli_candidates(vec![shim.clone(), native.clone(), native.clone()]);
+        assert_eq!(ranked, vec![native]);
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    fn unique_temp_dir() -> PathBuf {
+        env::temp_dir().join(format!("codex-bridge-config-test-{}", uuid::Uuid::new_v4()))
+    }
+
+    #[test]
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    fn resolve_cli_path_prefers_vendored_native_binary() {
+        let root = unique_temp_dir();
+        let shim = root.join("npm").join("codex.cmd");
+        let native = shim
+            .parent()
+            .expect("shim 目录")
+            .join("node_modules")
+            .join("@openai")
+            .join("codex")
+            .join("node_modules")
+            .join("@openai")
+            .join("codex-win32-x64")
+            .join("vendor")
+            .join("x86_64-pc-windows-msvc")
+            .join("bin")
+            .join("codex.exe");
+        fs::create_dir_all(native.parent().expect("原生二进制目录")).expect("建立目录");
+        fs::write(&shim, "").expect("写 shim");
+        fs::write(&native, "").expect("写原生二进制");
+
+        assert_eq!(
+            resolve_cli_path(&shim.to_string_lossy()),
+            native.to_string_lossy().to_string()
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn resolve_cli_path_keeps_shim_without_native_binary() {
+        let root = unique_temp_dir();
+        let shim = root.join("npm").join("codex.cmd");
+        fs::create_dir_all(shim.parent().expect("shim 目录")).expect("建立目录");
+        fs::write(&shim, "").expect("写 shim");
+
+        assert_eq!(
+            resolve_cli_path(&shim.to_string_lossy()),
+            shim.to_string_lossy().to_string()
+        );
+
+        fs::remove_dir_all(&root).ok();
     }
 }

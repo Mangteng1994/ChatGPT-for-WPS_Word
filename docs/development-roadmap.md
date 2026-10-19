@@ -184,7 +184,15 @@
 - 单文件打包：`npm run package:exe` → 停服务 → `panel:build` → `cargo build --release --features embedded-assets`（`-C target-feature=+crt-static`）→ `dist/codex-for-wps-word.exe`（约 3.5 MB，只依赖系统 DLL）。
 
 待办：
-- 在无 Node 环境做完整验收（安装 → 选项卡 → 面板 → 问答 → 写回 → 重启后可用 → 卸载无残留）。
+- 仅剩人工确认项：在 WPS 里点 `Codex` 选项卡 → 打开面板 → 问答 → 写回（需要人手操作，无法自动化）。
+
+已完成（阶段 6，2026-10-19）：
+- 无 Node 环境端到端验收：安装态在剔除 Node / npm 的 `PATH` 下通过 `install` / `doctor`，`/run/stream` 问答返回正确回答，提问期间进程树无 `node.exe` / `cmd.exe`；面板在浏览器中打开并完成一次问答；全杀服务后由自启任务拉起双服务；`uninstall` 无残留。
+- 验收中修掉的真实缺陷：
+  1. `codex exec` 在工作目录不是 git 仓库时直接拒绝运行（安装态默认工作目录正是如此）→ 调用时固定带 `--skip-git-repo-check`。
+  2. stdin 写端没关：Windows 匿名管道不支持半关闭，tokio 的 `shutdown()` 是空操作，`codex exec ... -` 一直等 EOF，`/run` 挂死 → 写完 prompt 后显式 `drop(stdin)`。
+  3. 模型列表读的是 `%USERPROFILE%\config.toml`，真实路径是 `%USERPROFILE%\.codex\config.toml`，导致面板拿不到用户配置的模型、默认选中了账号不支持的模型 → 新增 `codex_home_dir()` 并改为读 `~/.codex/config.toml` + `~/.codex/models_cache.json`。
+  4. CLI 探测漏掉桌面版运行时 `%LOCALAPPDATA%\OpenAI\Codex\bin\<hash>\codex.exe`，且偏向旧版 npm 启动器 → 补上该来源并按更新时间从新到旧排序。
 
 验收标准：
 1. 在没有 Node / Rust 的机器上，只放一个 exe，双击安装后 WPS 出现 Codex 选项卡且面板可问答。
@@ -211,7 +219,6 @@
 
 ## 最近下一步
 
-推进 `P7 单文件 exe 分发`。安装/卸载自举、看护、PS 薄包装、资源内嵌与 `npm run package:exe` 均已完成，单文件形态的安装 → 健康检查 → 内嵌资源服务 → 卸载无残留已在开发机验证通过。
+`P7 单文件 exe 分发` 收尾只剩人工确认：在 WPS 里走一遍 `Codex` 选项卡 → 打开面板 → 问答 → 写回。
 
-剩余任务：
-1. 在无 Node（并可无 Rust）的机器上端到端验收：安装 → 选项卡 → 面板 → 问答 → 写回 → 重启后可用 → 卸载无残留。
+其余环节已自动化验证（单文件安装/卸载、内嵌资源、零 Node 问答、面板加载、自启恢复、卸载无残留）。人工确认通过后 P7 即可结束，再排后续功能优先级。

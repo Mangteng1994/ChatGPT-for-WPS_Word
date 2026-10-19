@@ -158,6 +158,11 @@ pub async fn doctor() -> Result<()> {
         }
     } else {
         println!("Codex CLI: {cli_path}");
+        if config::is_script_shim(&cli_path) {
+            warnings.push(format!(
+                "Codex CLI 是脚本启动器（{cli_path}），运行依赖 Node 与 cmd.exe 中转；有原生 codex.exe 时建议在面板「Codex CLI 配置」里改填它"
+            ));
+        }
     }
 
     if runtime.working_dir.is_dir() {
