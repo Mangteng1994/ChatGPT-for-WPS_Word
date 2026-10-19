@@ -157,8 +157,9 @@ npm run package:exe
 
 同事的安装步骤：
 
-1. 把 `codex-for-wps-word.exe` 放到任意目录（例如 `%LOCALAPPDATA%\CodexForWpsWord`），双击或执行 `codex-for-wps-word.exe install`。
-2. `install` 会注册 WPS 加载项、建立登录自启任务、拉起本地服务；配置与日志写在 exe 同目录。
+1. 把 `codex-for-wps-word.exe` 放到任意目录（例如 `%LOCALAPPDATA%\CodexForWpsWord`）。
+2. 在该目录的命令行里执行 `codex-for-wps-word.exe install`：注册 WPS 加载项、建立登录自启任务、拉起本地服务；配置与日志写在 exe 同目录。
+   - **必须带上 `install` 参数**：直接双击只会前台启动 bridge，不会注册加载项，也不会建自启任务。
 3. 完全退出并重新打开 WPS，在 `Codex` 选项卡点击 `打开 Codex 面板`。
 
 排查与卸载：
